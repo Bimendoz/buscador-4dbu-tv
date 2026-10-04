@@ -146,23 +146,22 @@ async function webResults(query, siteDomain = "", max = 3) {
       if (r.ok) await chrome.storage.local.set({ braveStatus: { ok: true, at: Date.now() } });
     } catch {}
   }
-  // 2) respaldo: DuckDuckGo y Bing (páginas públicas de resultados)
-  if (found.length < max) {
-    try {
-      const html = await (await fetchT("https://html.duckduckgo.com/html/?q=" + q, 12000)).text();
-      for (const m of html.matchAll(/uddg=([^&"']+)/g)) add(decodeURIComponent(m[1]));
-      if (found.length < max) { // segunda página de DuckDuckGo
-        const h2 = await (await fetchT("https://html.duckduckgo.com/html/?s=30&dc=31&q=" + q, 12000)).text();
-        for (const m of h2.matchAll(/uddg=([^&"']+)/g)) add(decodeURIComponent(m[1]));
-      }
-    } catch {}
-  }
-  if (found.length < max) {
-    try {
-      const html = await (await fetchT(`https://www.bing.com/search?setlang=es&count=${Math.min(50, Math.max(10, max * 2))}&q=` + q, 12000)).text();
-      for (const m of html.matchAll(/<h2[^>]*><a[^>]+href="(https?:\/\/[^"]+)"/g)) add(unBing(m[1].replace(/&amp;/g, "&")));
-    } catch {}
-  }
+  // 2) respaldo: DuckDuckGo y Bing, página tras página de resultados (no solo la primera),
+  //    hasta juntar los que se piden o hasta que el buscador ya no dé nada nuevo. Sin tope fijo de páginas.
+  const pages = async (mk, re, pick) => {
+    for (let n = 0; found.length < max; n++) {
+      const before = found.length;
+      try {
+        const html = await (await fetchT(mk(n), 12000)).text();
+        for (const m of html.matchAll(re)) { try { add(pick(m)); } catch {} }
+      } catch {}
+      if (found.length === before) break; // esa página no trajo nada nuevo: el buscador se acabó
+    }
+  };
+  if (found.length < max) await pages((n) => n ? `https://html.duckduckgo.com/html/?s=${n * 30}&dc=${n * 30 + 1}&q=` + q : "https://html.duckduckgo.com/html/?q=" + q,
+    /uddg=([^&"']+)/g, (m) => decodeURIComponent(m[1]));
+  if (found.length < max) await pages((n) => `https://www.bing.com/search?setlang=es&count=50&first=${n * 50 + 1}&q=` + q,
+    /<h2[^>]*><a[^>]+href="(https?:\/\/[^"]+)"/g, (m) => unBing(m[1].replace(/&amp;/g, "&")));
   return found.slice(0, max);
 }
 
@@ -202,7 +201,7 @@ async function officialLivePages(website, query) {
     if (pages.some((x) => x.url === u)) continue;
     try { const r = await fetchT(u, 6000, { credentials: "include" }); if (r.ok && !/\/(404|error)/i.test(r.url)) add(r.url || u, 2); } catch {}
   }
-  try { for (const u of await webResults(query, site, 4)) add(u, 4); } catch {}
+  try { for (const u of await webResults(query, site, 1000)) add(u, 4); } catch {}
   return pages.sort((a, b) => b.score - a.score).map((p) => p.url);
 }
 // Sin página oficial en el directorio: la busca en la web y la reconoce por el nombre del canal en el dominio
@@ -472,7 +471,7 @@ async function runSearch(query, opts = {}) {
       // 3) resultados de la web, en su orden, TODOS los que den los buscadores (o hasta completar los links pedidos)
       if (!enough()) {
         await step(`${lleva()}: busco más páginas en la web…`);
-        const web = await webResults(langQuery(query, mode, countries), "", Number.isFinite(N) ? Math.max(15, (N - job.tried) * 3) : 100);
+        const web = await webResults(langQuery(query, mode, countries), "", Number.isFinite(N) ? Math.max(15, (N - job.tried) * 3) : 1000);
         const sites = web.filter((u) => !walked.has(u));
         job.web = { got: sites.length };
         for (const [i, site] of sites.entries()) {
