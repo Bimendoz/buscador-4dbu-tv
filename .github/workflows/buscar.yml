@@ -1,13 +1,13 @@
 # +4dBu TV · tu buscador (la extensión tal cual) corriendo en un Chrome de GitHub.
-# Lo enciende tu página cuando buscas un canal. No hay que tocar nada aquí.
+# Lo enciende tu página cuando buscas. No hay que tocar nada aquí.
+# Repositorio público = minutos ilimitados y gratis. Aquí NO viaja nada tuyo: solo el número de la búsqueda.
+# La dirección de tu página es un secreto (TV_PAGE, oculto en los registros) y la búsqueda se recoge de tu página.
 name: buscar
 on:
   workflow_dispatch:
     inputs:
       id: { description: "búsqueda", required: true }
       t: { description: "llave de esa búsqueda", required: true }
-      page: { description: "tu página", required: true }
-      job: { description: "qué buscar (base64)", required: true }
 run-name: "Buscar ${{ inputs.id }}"
 jobs:
   buscar:
@@ -15,22 +15,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Avisar a tu página que ya arrancó
+        env:
+          TV_URL: ${{ secrets.TV_PAGE }}
+          JOB_ID: ${{ inputs.id }}
+          JOB_T: ${{ inputs.t }}
         run: |
-          curl -s -m 10 -X POST -H "content-type: application/json" \
-            --data '{"status":"running","step":"GitHub arrancó: preparando Chrome con tu extensión…"}' \
-            "${{ inputs.page }}/gh/avance?id=${{ inputs.id }}&t=${{ inputs.t }}" || true
+          curl -s -m 10 -o /dev/null -X POST -H "content-type: application/json" \
+            --data '{"status":"running","step":"GitHub arrancó: preparando Chrome…"}' \
+            "$TV_URL/gh/avance?id=$JOB_ID&t=$JOB_T" || true
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       # Rápido: Chrome y las piezas quedan guardados entre búsquedas (no se descargan cada vez)
       - name: Chrome guardado
-        id: pw
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: chrome-${{ runner.os }}-pw-1.56.1
       - name: Piezas guardadas
-        id: nm
         uses: actions/cache@v4
         with:
           path: runner/node_modules
@@ -38,16 +40,14 @@ jobs:
       - name: Preparar
         working-directory: runner
         run: |
-          [ -d node_modules/playwright ] || npm install --no-audit --no-fund
-          [ -d ~/.cache/ms-playwright ] && ls ~/.cache/ms-playwright | grep -q chromium || npx playwright install chromium
-          # las librerías del sistema solo si Chrome no arranca sin ellas (casi nunca hace falta)
-          node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch();await b.close()}).catch(()=>process.exit(1))" || npx playwright install-deps chromium
-      - name: Buscar con tu extensión
+          [ -d node_modules/playwright ] || npm install --no-audit --no-fund --silent
+          [ -d ~/.cache/ms-playwright ] && ls ~/.cache/ms-playwright | grep -q chromium || npx playwright install chromium > /dev/null
+          node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch();await b.close()}).catch(()=>process.exit(1))" || npx playwright install-deps chromium > /dev/null
+      - name: Buscar
         working-directory: runner
         env:
           EXT_DIR: ${{ github.workspace }}/extension
-          TV_URL: ${{ inputs.page }}
+          TV_URL: ${{ secrets.TV_PAGE }}
           JOB_ID: ${{ inputs.id }}
           JOB_T: ${{ inputs.t }}
-          JOB: ${{ inputs.job }}
         run: node buscar.mjs
