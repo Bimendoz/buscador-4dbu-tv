@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>HLS Stream Detector</title>
+  <style>
+    /* ===== Tema «consola broadcast» (+4dBu) ===== */
+    :root {
+      --bg: #0b0d10; --panel: #12151a; --panel2: #181c22; --raise: #1f242c; --line: #242a33; --line2: #2f3640;
+      --text: #e6e8eb; --muted: #8a919c; --dim: #5d6470;
+      --red: #ff3b30; --green: #2fd158; --amber: #ffb020; --blue: #3d8bfd; --cyan: #2ec5d3; --violet: #9b7bff;
+      --accent: var(--blue); --ok: var(--green); --warn: var(--amber); --info: var(--blue); --dash: var(--violet);
+      --mono: "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body { width: 420px; max-height: 590px; margin: 0; font: 12px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg); color: var(--text); display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+    svg.ic { flex: 0 0 auto; vertical-align: -3px; }
+    ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 4px; } ::-webkit-scrollbar-track { background: transparent; }
+
+    /* franja de marca */
+    .brand { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #07080a; border-bottom: 1px solid var(--line);
+      font: 600 10px/1 var(--mono); letter-spacing: .14em; color: var(--muted); text-transform: uppercase; }
+    .brand .tally { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .brand b { color: var(--text); font-weight: 700; }
+    .brand .ver { margin-left: auto; color: var(--dim); letter-spacing: .06em; }
+
+    header { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .tabs { display: flex; flex: 1; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
+    .tabs button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px; border: 0; background: transparent; color: var(--muted);
+      font: 600 10.5px/1 inherit; letter-spacing: .03em; text-transform: uppercase; padding: 7px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+    .tabs button:hover { color: var(--text); }
+    .tabs button.on { background: var(--raise); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+    .tabs #tabSearch { flex: 0 0 auto; padding: 7px 8px; }
+    .tabs .n { font: 700 10px/1 var(--mono); padding: 2px 5px; border-radius: 3px; background: var(--red); color: #fff; letter-spacing: 0; }
+    .tabs .n.zero { background: var(--line2); color: var(--muted); }
+    .icon-btn { flex: 0 0 30px; display: grid; place-items: center; border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 5px; width: 30px; height: 29px; cursor: pointer; }
+    .icon-btn:hover { color: var(--text); border-color: var(--line2); }
+
+    #settings { display: none; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    #settings.open { display: block; }
+    #settings label { display: flex; gap: 9px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
+    #settings small { color: var(--muted); display: block; }
+    #settings .fmt { flex-direction: column; gap: 5px; cursor: default; }
+    #settings select, .catsel { font: inherit; font-size: 11.5px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--text); }
+    #settings .keys, .keys { color: var(--muted); font-size: 10.5px; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 7px; }
+    #settings .cntrow { padding: 6px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; }
+    #settings .cntctl { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+    #settings .cntctl input { width: 70px; font: inherit; padding: 4px 6px; border: 1px solid var(--line2); border-radius: 3px; background: var(--bg); color: var(--text); }
+    #searchCountSaved { color: var(--ok, #2e9d5b); font-size: 11px; }
+    #settings a, .keys a { color: var(--accent); text-decoration: none; }
+    kbd { font: 10px var(--mono); border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; color: var(--text); background: var(--panel2); }
+    input[type=checkbox] { accent-color: var(--accent); margin-top: 2px; }
+
+    main { overflow-y: auto; padding: 10px; flex: 1; }
+    .empty { color: var(--muted); text-align: center; padding: 28px 14px; line-height: 1.55; }
+    .note { color: var(--dim); font-size: 10.5px; margin: 2px 0 8px; font-family: var(--mono); letter-spacing: .02em; }
+
+    /* tarjeta = canal (barra de estado a la izquierda, como un tally) */
+    .card { position: relative; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--line2); border-radius: 4px; padding: 9px 10px 10px; margin-bottom: 8px; }
+    .card:hover { border-color: var(--line2); }
+    .card[data-state=live] { border-left-color: var(--red); }
+    .card[data-state=vod] { border-left-color: var(--green); }
+    .card[data-state=file] { border-left-color: var(--cyan); }
+    .card[data-state=yt] { border-left-color: #c4302b; }
+    .card[data-state=down] { border-left-color: var(--dim); opacity: .92; }
+    .row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .chip { display: inline-flex; align-items: center; gap: 4px; font: 700 9.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+      padding: 3px 5px; border-radius: 2px; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line2); white-space: nowrap; }
+    .chip svg.ic { width: 11px; height: 11px; vertical-align: 0; }
+    .chip.live { background: var(--red); color: #fff; box-shadow: none; }
+    .chip.vod { color: var(--green); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 55%, transparent); }
+    .chip.master { color: var(--blue); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 55%, transparent); }
+    .chip.enc, .chip.soon { color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 55%, transparent); }
+    .chip.dash { color: var(--violet); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 55%, transparent); }
+    .chip.file { color: var(--cyan); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 55%, transparent); }
+    .chip.yt { background: #c4302b; color: #fff; box-shadow: none; }
+    .chip.expired { color: var(--dim); text-decoration: line-through; }
+    .chip.exp { color: var(--text); }
+    .chip.car-ok { background: var(--green); color: #04150a; box-shadow: none; }
+    .chip.car-bad { background: var(--red); color: #fff; box-shadow: none; }
+    .chip.car-unk { color: var(--muted); }
+    .card:has(.chip.car-bad) { border-left-color: var(--red); }
+    .chip.t-official { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+    .chip.t-cdn { color: var(--blue); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 55%, transparent); }
+    .chip.t-page { color: var(--cyan); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 55%, transparent); }
+    .chip.t-unknown { color: var(--dim); }
+    .chip.t-unofficial { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 60%, transparent); }
+    .card:has(.chip.t-unofficial) { border-left-style: dashed; }
+    .chip.up { color: var(--green); box-shadow: none; padding-left: 0; }
+    .chip.down { color: var(--red); box-shadow: none; padding-left: 0; }
+    .host { color: var(--dim); font: 10.5px var(--mono); flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+    .hits { color: var(--dim); font: 10px var(--mono); }
+    .name { width: 100%; margin: 7px 0 4px; padding: 5px 7px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--text); font: 600 13px/1.3 inherit; }
+    .name:hover { border-color: var(--line); }
+    .name:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+    .name::placeholder { color: var(--dim); font-weight: 400; }
+    .name.mono, .mono { font: 11px var(--mono) !important; }
+    .url { font: 10px/1.4 var(--mono); color: var(--dim); word-break: break-all; padding: 0 7px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .meta { font: 10.5px/1.45 var(--mono); color: var(--muted); margin: 6px 7px 8px; }
+    .meta.err { color: var(--dim); }
+    .btns { display: flex; gap: 4px; }
+    button.b { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 1; height: 28px; padding: 0 8px; font: 600 11px/1 inherit;
+      cursor: pointer; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); border-radius: 3px; white-space: nowrap; }
+    button.b:hover:not(:disabled) { background: var(--raise); border-color: #3a424e; }
+    button.b:active:not(:disabled) { transform: translateY(1px); }
+    button.b:disabled { opacity: .4; cursor: default; }
+    button.b.sq { flex: 0 0 30px; padding: 0; }
+    button.b.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.b.primary:hover:not(:disabled) { background: #5a9dff; border-color: #5a9dff; }
+    button.b.star.on { color: var(--amber); }
+    button.b.done { background: var(--green); border-color: var(--green); color: #04150a; }
+    button.b.mini { flex: 0 0 auto; height: 22px; padding: 0 7px; font-size: 10.5px; }
+    footer .danger, button.b.danger { color: var(--red); }
+    .more { display: none; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+    .more.open { display: block; }
+    .more .lbl { color: var(--dim); font: 600 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; margin: 8px 0 4px; }
+    .cmd { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 11px; color: var(--muted); }
+    .cmd span { flex: 1; }
+    .cmd button { flex: 0 0 auto; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; color: var(--muted); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    summary:hover { color: var(--text); }
+    .variant { display: flex; align-items: center; gap: 5px; padding: 5px 0; border-top: 1px solid var(--line); font: 10.5px var(--mono); color: var(--muted); }
+    .variant span { flex: 1; }
+    .variant button { flex: 0 0 auto; }
+    .ytmode { display: flex; gap: 7px; align-items: center; font-size: 11px; margin: -2px 7px 8px; color: var(--muted); cursor: pointer; }
+
+    footer { display: flex; gap: 5px; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--panel); }
+    footer[hidden] { display: none; }
+
+    /* link único publicado */
+    .pub { background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--accent); border-radius: 4px; padding: 10px; margin-bottom: 10px; }
+    .pub-t { display: flex; align-items: center; gap: 7px; font: 700 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
+    .pub-d { color: var(--muted); font-size: 11px; margin: 5px 0 8px; }
+    .pub a { color: var(--accent); font-size: 11.5px; text-decoration: none; }
+    .pub .name { border-color: var(--line); background: var(--bg); }
+    .pub .status { font-size: 10.5px; color: var(--muted); margin-top: 7px; }
+    .pub .status.err { color: var(--red); font-weight: 600; }
+    .pub label { display: flex; gap: 7px; align-items: center; font-size: 11px; margin-top: 7px; cursor: pointer; color: var(--muted); }
+
+    /* categorías y filtros */
+    .cat { display: flex; gap: 5px; align-items: center; margin: 0 7px 8px; color: var(--dim); }
+    .catsel { flex: 1; min-width: 0; cursor: pointer; }
+    .name.catname { margin: 0; flex: 1; min-width: 0; font-weight: 400; border-color: var(--line); background: var(--bg); }
+    .cat button.b { flex: 0 0 auto; }
+    .filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+    .fchip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 3px;
+      padding: 4px 8px; font: 600 10.5px/1 inherit; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fchip:hover { color: var(--text); border-color: var(--line2); }
+    .fchip.on { background: var(--raise); color: var(--text); border-color: var(--accent); }
+    .fchip.act { color: var(--accent); border-style: dashed; }
+    .sec { display: flex; align-items: center; gap: 7px; margin: 14px 0 7px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+    .sec-t { font: 700 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sec-k { flex: 1; color: var(--dim); font: 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .addbox { border-left-color: var(--accent); }
+    .addbox .status { font-size: 10.5px; color: var(--muted); padding: 0 7px; }
+    .addbox .status.err { color: var(--red); font-weight: 600; }
+
+    /* buscador */
+    .sbox { display: flex; gap: 5px; margin-bottom: 7px; }
+    .sbox .name { margin: 0; flex: 1; border-color: var(--line); background: var(--panel); font-weight: 500; }
+    .sbox button.b { flex: 0 0 auto; padding: 0 12px; }
+    .sstat { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 9px 10px; margin-bottom: 8px; font-size: 11.5px; }
+    .sstat.run { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+    .sstat .sub { color: var(--dim); font: 10px var(--mono); margin-top: 4px; letter-spacing: .02em; }
+    .sstat li { color: var(--muted); font: 10.5px var(--mono); }
+    .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; animation: sp .8s linear infinite; margin-right: 7px; vertical-align: -1px; }
+    @keyframes sp { to { transform: rotate(360deg); } }
+    .verif { display: flex; align-items: center; gap: 5px; color: var(--green); font: 600 10px var(--mono); letter-spacing: .03em; margin: 0 0 4px 2px; }
+    .verif.weak { color: var(--amber); }
+    .scanf { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; margin-bottom: 8px; }
+    .scanf label { display: flex; flex-direction: column; gap: 2px; font: 600 9.5px var(--mono); color: var(--dim); letter-spacing: .05em; text-transform: uppercase; }
+    .scanbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; font-size: 11px; color: var(--dim); }
+    .scanrow { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; margin-bottom: 5px; background: var(--panel); cursor: pointer; }
+    .scanrow.saved { opacity: .55; }
+    .scanrow input { margin-top: 3px; flex: 0 0 auto; }
+    .scanrow img, .scanrow .nologo { width: 34px; height: 24px; object-fit: contain; flex: 0 0 auto; display: grid; place-items: center; }
+    .scanrow .t { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+    .scanrow small { color: var(--dim); font-size: 10.5px; }
+    .scanrow small.mono { font-family: var(--mono); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .carchk { display: flex; align-items: flex-start; gap: 6px; font-size: 11px; margin: -2px 7px 8px; padding: 6px 8px; border-radius: 3px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+    .carchk svg.ic { margin-top: 1px; }
+    .carchk.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+    .carchk.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
+    .carchk.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+  </style>
+</head>
+<body>
+  <div class="brand"><span class="tally"></span><b>HLS Stream Detector</b><span>· +4dBu</span><span class="ver" id="ver"></span></div>
+  <header>
+    <div class="tabs">
+      <button id="tabThis" class="on" data-icon="monitor">Pestaña<span class="n" id="countThis">0</span></button>
+      <button id="tabSaved" data-icon="list">Guardados<span class="n" id="countSaved">0</span></button>
+      <button id="tabSearch" title="Buscar un canal o extraerlo de una página" data-icon="search">Buscar</button>
+    </div>
+    <button class="icon-btn" id="btnSettings" title="Ajustes rápidos" data-icon="settings"></button>
+  </header>
+
+  <section id="settings">
+    <label><input type="checkbox" id="optLive">
+      <span>Solo transmisiones en vivo<small>Oculta videos grabados (VOD) y deja solo los directos.</small></span></label>
+    <label><input type="checkbox" id="optAutoClear">
+      <span>Vaciar la lista al cambiar de página<small>Evita mezclar flujos de sitios anteriores.</small></span></label>
+    <label class="fmt"><span>Formato de la lista M3U<small>Cómo van el Referer y el User-Agent para que cada reproductor abra el canal.</small></span>
+      <select id="optFormat">
+        <option value="iptv">Apps IPTV: CarTV, TiviMate, Kodi (recomendado)</option>
+        <option value="both">VLC + apps IPTV (el Referer no llega a CarTV)</option>
+        <option value="vlc">Solo VLC</option>
+      </select></label>
+    <label><input type="checkbox" id="optVlc">
+      <span>Incluir Referer y User-Agent en el M3U<small>VLC los necesita cuando el servidor bloquea reproductores externos.</small></span></label>
+    <div class="cntrow">
+      <span>Links a probar en cada búsqueda<small>0 o «Todos» = no omite ningún link: prueba TODO lo que aparezca, uno por uno y en orden (directorio → todos los sitios oficiales y sus páginas → todos los resultados de la web). Con un número, prueba exactamente esa cantidad.</small></span>
+      <div class="cntctl"><input type="number" id="optSearchCount" min="0" step="1" inputmode="numeric">
+        <button class="b" id="btnSaveCount">Guardar</button><button class="b" id="btnAllCount">Todos</button><span id="searchCountSaved"></span></div>
+    </div>
+    <label><input type="checkbox" id="optPortable">
+      <span>Solo links que abran en CarTV con datos<small>Cada link se prueba como lo pide CarTV. Además descarta los amarrados a la red de este computador (fuera de tu casa no abren) y los que vencen pronto sin poder renovarse.</small></span></label>
+    <label><input type="checkbox" id="optStrip">
+      <span>Quitar parámetros de la URL (?token=…)<small>Cuidado: muchos CDNs exigen el token y la URL deja de funcionar.</small></span></label>
+    <div class="keys">Atajos: <kbd>Alt+Shift+H</kbd> abrir · <kbd>Alt+Shift+C</kbd> copiar link principal · <kbd>Alt+Shift+M</kbd> monitor.
+      También con clic derecho en la página. <a href="#" id="lnkShortcuts">Cambiar atajos</a></div>
+    <div class="keys"><a href="#" id="lnkOptions"><b>Más opciones</b></a>: ordenar y renombrar categorías, mover varios canales, revisión automática, guía de programación, alertas por Telegram/WhatsApp, historial de caídas y copias de seguridad.</div>
+  </section>
+
+  <main id="lista"></main>
+
+  <footer id="footThis">
+    <button class="b" id="btnCopyAll" data-icon="copy">Copiar todo (M3U)</button>
+    <button class="b" id="btnExport" data-icon="download">Exportar .m3u</button>
+    <button class="b danger" id="btnClear" data-icon="trash">Limpiar</button>
+  </footer>
+  <footer id="footSaved" hidden>
+    <button class="b" id="btnExportSaved" data-icon="download">Exportar .m3u</button>
+    <button class="b" id="btnImport" data-icon="upload">Importar .m3u</button>
+    <button class="b danger" id="btnClearSaved" data-icon="trash">Vaciar</button>
+    <input type="file" id="fileImport" accept=".m3u,.m3u8,audio/x-mpegurl,text/plain" hidden>
+  </footer>
+
+  <script src="lib/common.js"></script>
+  <script src="lib/icons.js"></script>
+  <script src="lib/lang.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
