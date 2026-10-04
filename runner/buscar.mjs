@@ -7,18 +7,117 @@ import path from "node:path";
 const EXT = path.resolve(process.env.EXT_DIR || "extension");
 const PAGE = (process.env.TV_URL || "").replace(/\/+$/, "");
 const ID = process.env.JOB_ID || "local", T = process.env.JOB_T || "";
-const job = JSON.parse(Buffer.from(process.env.JOB || "e30=", "base64").toString("utf8") || "{}");
+// la búsqueda se recoge de tu página (una sola vez): nada tuyo queda escrito en GitHub
+let job = {};
+if (process.env.JOB) job = JSON.parse(Buffer.from(process.env.JOB, "base64").toString("utf8") || "{}");
+else if (PAGE) {
+  try { const r = await fetch(`${PAGE}/gh/job?${new URLSearchParams({ id: ID, t: T })}`); if (r.ok) job = await r.json(); else { console.log("no pude recoger la búsqueda (" + r.status + ")"); process.exit(0); } }
+  catch { console.log("no pude recoger la búsqueda"); process.exit(0); }
+}
+// en un repositorio público nada de esto se imprime: sin direcciones, nombres ni claves en los registros
+console.log = () => {}; console.error = () => {};
 const MAX_MIN = +(process.env.MAX_MIN || 55);
 
 let cancel = false;
 const send = async (data) => {
-  if (!PAGE) return console.log("[avance]", JSON.stringify(data).slice(0, 400));
+  if (!PAGE) return;
   try {
     const r = await fetch(`${PAGE}/gh/avance?${new URLSearchParams({ id: ID, t: T })}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
     const d = await r.json().catch(() => ({}));
     if (d.cancel) cancel = true;
-  } catch (e) { console.log("no pude avisar a la página:", e.message); }
+  } catch {}
 };
+
+// ---------- MODO «TU FUENTE»: entra a TU sitio, usa su buscador interno con tu nombre y saca los videos ----------
+// (sin límite de minutos: es el Chrome de GitHub, no el navegador de Cloudflare)
+if (job.mode === "fuente") {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+  const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
+  const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
+  const out = { status: "running", step: "Chrome de GitHub listo: entrando a tu fuente…", found: [], pages: [], tried: 0 };
+  const seen = new Set();
+  const isVid = (u) => /\.(m3u8|mp4|m4v|webm|mov|mkv)(\?|#|$)/i.test(u);
+  const add = (u, ref, page, src) => {
+    if (!/^https?:/i.test(u) || seen.has(u) || /\.(ts|m4s|aac|vtt|srt)(\?|#|$)/i.test(u) || /blob:/i.test(u)) return;
+    if (/(doubleclick|googlesyndication|imasdk|adservice|adsystem|\/ads?\/|preroll|vast)/i.test(u)) return;
+    seen.add(u); out.found.push({ url: u, referer: ref || page, page, fuente: src });
+  };
+  const watch = (pg, src) => {
+    pg.on("request", (r) => { const u = r.url(); if (isVid(u) || r.resourceType() === "media") add(u, r.headers().referer || pg.url(), pg.url(), src); });
+    pg.on("response", (r) => { if (/mpegurl/i.test(r.headers()["content-type"] || "")) add(r.url(), pg.url(), pg.url(), src); });
+  };
+  const norm = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const STOP = new Set(["the", "a", "an", "of", "el", "la", "los", "las", "de", "del", "y", "and", "en", "un", "una"]);
+  const step = async (t) => { out.step = t; await send({ status: "running", job: out }); };
+  const autoplay = async (pg) => { for (const f of pg.frames()) await f.evaluate(() => {
+    for (const v of document.querySelectorAll("video")) { v.muted = true; v.play().catch(() => {}); }
+    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i]");
+    if (b && [...document.querySelectorAll("video")].every((v) => v.paused)) b.click();
+  }).catch(() => {}); };
+  const domVideos = async (pg, src) => { for (const f of pg.frames()) { const vs = await f.evaluate(() => [...document.querySelectorAll("video, video source, source")].map((v) => v.currentSrc || v.src).filter(Boolean)).catch(() => []); for (const v of vs) add(v, pg.url(), pg.url(), src); } };
+  // abrir una página de video: darle play y anotar lo que pide el reproductor
+  const openVideo = async (u, src, label) => {
+    if (cancel) return;
+    await step(label);
+    const p2 = await ctx.newPage(); watch(p2, src);
+    const before = out.found.length, t0 = Date.now();
+    try {
+      await p2.goto(u, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+      while (Date.now() - t0 < 16000 && !cancel) {
+        await p2.waitForTimeout(1500); await autoplay(p2); await domVideos(p2, src);
+        if (out.found.length > before && Date.now() - t0 > 6000) break;
+      }
+    } catch {}
+    out.tried++; out.pages.push({ url: u, found: out.found.length - before });
+    await p2.close().catch(() => {});
+  };
+  const sameDom = (u, dom) => { try { const h = new URL(u).hostname.toLowerCase(); return !dom || h === dom || h.endsWith("." + dom); } catch { return false; } };
+  try {
+    // páginas sueltas (el ▶ de un resultado): solo abrir y capturar
+    for (const [i, u] of (job.pages || []).entries()) await openVideo(u, job.fuenteName || "", `Abriendo la página ${i + 1} de ${job.pages.length} en el Chrome de GitHub…`);
+    for (const f of job.fuentes || []) for (const q of job.names || []) {
+      if (cancel) break;
+      await step(`★ ${f.name}: buscando «${q}» con el buscador de tu sitio…`);
+      const pg = await ctx.newPage(); watch(pg, f.name);
+      try {
+        if (f.tpl) await pg.goto(f.tpl.replace("{q}", encodeURIComponent(q)), { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+        else { // sin dirección de búsqueda: se escribe en el buscador del sitio, como lo harías tú
+          await pg.goto(f.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await pg.waitForTimeout(2500);
+          const sel = "input[type=search], input[name=s], input[name=q], input[name*=search i], input[name*=buscar i], input[name*=query i], input[placeholder*=usca i], input[placeholder*=earch i], input[aria-label*=usca i], input[aria-label*=earch i]";
+          let box = pg.locator(sel).first();
+          if (!(await box.count())) { // buscador escondido tras una lupa
+            const lupa = pg.locator("[class*=search i] button, button[aria-label*=search i], button[aria-label*=buscar i], a[href*=search i], [class*=search-toggle i], [class*=lupa i]").first();
+            if (await lupa.count()) { await lupa.click({ timeout: 4000 }).catch(() => {}); await pg.waitForTimeout(1200); box = pg.locator(sel).first(); }
+          }
+          if (await box.count()) { await box.click({ timeout: 4000 }).catch(() => {}); await box.fill(q).catch(() => {}); await box.press("Enter").catch(() => {}); }
+          else { out.pages.push({ url: f.url, q, err: "no encontré el buscador de tu sitio" }); }
+        }
+        await pg.waitForLoadState("domcontentloaded").catch(() => {});
+        await pg.waitForTimeout(5000);
+        await domVideos(pg, f.name);
+        const links = [];
+        for (const fr of pg.frames()) links.push(...await fr.evaluate(() => [...document.querySelectorAll("a[href]")].map((a) => ({ u: a.href, t: (a.innerText || "") + " " + (a.title || "") + " " + (a.querySelector("img")?.alt || "") }))).catch(() => []));
+        for (const l of links) if (isVid(l.u)) add(l.u, pg.url(), pg.url(), f.name);
+        const qw = norm(q).split(" ").filter((w) => w && !STOP.has(w));
+        const here = pg.url().split("#")[0];
+        const cand = [...new Map(links.filter((l) => /^https?:/i.test(l.u) && !isVid(l.u) && sameDom(l.u, f.dom) && l.u.split("#")[0] !== here
+            && !/\/(tag|tags|category|categoria|genero|genre|page|pagina|login|register|registro|account|cuenta|contact|contacto|privacy|feed)(\/|$)/i.test(new URL(l.u).pathname))
+          .map((l) => { const txt = " " + norm(l.t + " " + decodeURIComponent(new URL(l.u).pathname)) + " "; return { ...l, hits: qw.filter((w) => txt.includes(" " + w + " ")).length }; })
+          .filter((l) => l.hits).sort((a, b) => b.hits - a.hits).map((l) => [l.u.split("#")[0], l])).values()].slice(0, +job.max || 8);
+        out.pages.push({ url: pg.url(), q, results: cand.length });
+        await pg.close().catch(() => {});
+        for (const [i, c] of cand.entries()) await openVideo(c.u, f.name, `★ ${f.name}: «${q}» · abriendo resultado ${i + 1} de ${cand.length}: ${c.t.trim().slice(0, 60) || c.u.slice(0, 60)}`);
+      } catch (e) { out.pages.push({ url: f.url, q, err: String(e?.message || e) }); await pg.close().catch(() => {}); }
+    }
+    out.status = cancel ? "cancelled" : "done";
+    out.step = out.found.length ? `★ Tu fuente: ${out.found.length} video(s) encontrados (Chrome de GitHub).` : `★ Tu fuente: no salió video (revisé ${out.pages.length} página(s) en el Chrome de GitHub).`;
+  } catch (e) { out.status = "error"; out.step = "Error en el Chrome de GitHub: " + (e?.message || e); }
+  await send({ status: out.status, job: out });
+  await browser.close().catch(() => {});
+  console.log("listo (fuente)");
+  process.exit(0);
+}
 
 await send({ status: "running", step: "Chrome abierto en GitHub: cargando tu extensión…" });
 const ctx = await chromium.launchPersistentContext("", {
