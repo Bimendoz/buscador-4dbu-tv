@@ -33,7 +33,7 @@ if (job.braveKey) await sw.evaluate(async (k) => { const { settings = {} } = awa
 await sw.evaluate((j) => {
   self.__tvJob = null; self.__tvDone = false; self.__tvCtl = { cancelled: false, tabs: new Set() };
   const opts = { ctl: self.__tvCtl, onSave: (x) => { self.__tvJob = JSON.parse(JSON.stringify(x)); } };
-  for (const k of ["pageUrl", "langMode", "countries", "searchCount", "portableOnly"]) if (j[k] != null && j[k] !== "") opts[k] = j[k];
+  for (const k of ["pageUrl", "skipDirTests", "langMode", "countries", "searchCount", "portableOnly"]) if (j[k] != null && j[k] !== "") opts[k] = j[k];
   runSearch(j.query || "", opts).then(
     (x) => { self.__tvJob = JSON.parse(JSON.stringify(x)); self.__tvDone = true; },
     (e) => { self.__tvJob = { ...(self.__tvJob || {}), status: "error", step: "Error: " + (e?.message || e) }; self.__tvDone = true; });
