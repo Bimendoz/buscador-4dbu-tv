@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opciones — HLS Stream Detector</title>
+  <style>
+    :root { --bg: #0b0d10; --panel: #12151a; --panel2: #181c22; --raise: #1f242c; --line: #242a33; --line2: #2f3640; --text: #e6e8eb; --muted: #8a919c; --dim: #5d6470;
+      --accent: #3d8bfd; --ok: #2fd158; --red: #ff3b30; --warn: #ffb020;
+      --mono: "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace; color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 13.5px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; }
+    svg.ic { flex: 0 0 auto; vertical-align: -3px; }
+    .brand { display: flex; align-items: center; gap: 8px; padding: 7px 16px; background: #07080a; border-bottom: 1px solid var(--line);
+      font: 600 10px/1 var(--mono); letter-spacing: .14em; color: var(--muted); text-transform: uppercase; }
+    .brand .tally { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .brand b { color: var(--text); }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 22px 16px 60px; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 2px; display: flex; align-items: center; gap: 10px; }
+    .lead { color: var(--muted); margin: 0 0 16px; }
+    nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 2; border-bottom: 1px solid var(--line); }
+    nav a { color: var(--muted); text-decoration: none; font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 6px 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); }
+    nav a:hover { color: var(--text); border-color: var(--line2); }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 16px 18px; margin-bottom: 12px; scroll-margin-top: 60px; }
+    h2 { font: 700 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+    h2::before { content: ""; width: 3px; height: 12px; background: var(--accent); }
+    .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; max-width: 72ch; }
+    label.row { display: flex; gap: 10px; align-items: center; margin: 9px 0; flex-wrap: wrap; }
+    label.row > span:first-child { min-width: 200px; font-weight: 600; font-size: 12.5px; }
+    input[type=text], input[type=password], input[type=url], select { font: inherit; font-size: 13px; height: 32px; padding: 0 9px; border: 1px solid var(--line2); border-radius: 3px; background: var(--bg); color: var(--text); min-width: 0; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+    input.grow { flex: 1; min-width: 200px; }
+    button { display: inline-flex; align-items: center; gap: 6px; font: 600 12.5px/1 inherit; height: 32px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 3px; background: var(--panel2); color: var(--text); cursor: pointer; white-space: nowrap; }
+    button:hover:not(:disabled) { background: var(--raise); }
+    button:disabled { opacity: .4; cursor: default; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { color: var(--red); }
+    button.done { background: var(--ok); border-color: var(--ok); color: #04150a; }
+    .bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+    .status { font: 11.5px var(--mono); color: var(--muted); }
+    .status.err { color: var(--red); font-weight: 600; }
+    .status.ok { color: var(--ok); font-weight: 600; }
+    .cats { list-style: none; margin: 0; padding: 0; }
+    .cats li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; margin-bottom: 5px; background: var(--bg); }
+    .cats li.drag { opacity: .4; }
+    .cats li.over { border-color: var(--accent); }
+    .handle { cursor: grab; color: var(--dim); user-select: none; display: grid; place-items: center; }
+    .cats input { flex: 1; border-color: transparent; background: transparent; }
+    .cats input:hover { border-color: var(--line2); }
+    .n { font: 700 10.5px var(--mono); padding: 2px 6px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--line2); color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { font: 700 9.5px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: .12em; }
+    tbody tr:hover td { background: var(--panel2); }
+    td.nm { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td img { width: 28px; height: 28px; object-fit: contain; border-radius: 3px; background: var(--raise); vertical-align: middle; }
+    .dot { display: inline-flex; align-items: center; gap: 5px; font: 700 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+    .dot.ok { color: var(--ok); } .dot.bad { color: var(--red); } .dot.unk { color: var(--dim); }
+    .scroll { overflow-x: auto; }
+    .links input { font: 12px var(--mono); }
+    code { font: 12px var(--mono); background: var(--raise); padding: 1px 5px; border-radius: 2px; }
+    details { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+    summary { cursor: pointer; font: 600 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    details ol { margin: 8px 0 0; padding-left: 20px; }
+    @media (max-width: 600px) { label.row > span:first-child { min-width: 100%; } }
+  </style>
+</head>
+<body>
+<div class="brand"><span class="tally"></span><b>HLS Stream Detector</b><span>· Opciones</span></div>
+<div class="wrap">
+  <h1><span data-icon="settings" data-icon-size="20"></span>Opciones</h1>
+  <p class="lead">HLS Stream Detector · categorías, canales, revisión automática, lista publicada, alertas y copias de seguridad.</p>
+  <nav>
+    <a href="#s-cats">Categorías</a><a href="#s-chan">Canales</a><a href="#s-health">Revisión automática</a>
+    <a href="#s-list">Lista y guía</a><a href="#s-brave">Buscador web</a><a href="#s-relay">Puente iPhone</a><a href="#s-prod">Modo producción</a><a href="#s-hist">Historial de caídas</a><a href="#s-backup">Copia de seguridad</a>
+  </nav>
+
+  <section id="s-cats">
+    <h2>Categorías</h2>
+    <p class="hint">Arrastra desde el borde izquierdo para cambiar el orden (así salen en CarTV y VLC). Cambia el nombre escribiendo encima. Al borrar una categoría sus canales pasan a Automática.</p>
+    <ul class="cats" id="catList"></ul>
+    <div class="bar"><input type="text" id="newCat" class="grow" placeholder="Nueva categoría" maxlength="40"><button id="btnAddCat" class="primary" data-icon="plus">Agregar</button></div>
+  </section>
+
+  <section id="s-chan">
+    <h2>Canales guardados</h2>
+    <p class="hint">Marca varios para moverlos de categoría o borrarlos de una vez.</p>
+    <div class="bar">
+      <select id="chanFilter"></select>
+      <span class="status" id="chanCount"></span>
+      <span style="flex:1"></span>
+      <select id="bulkTarget"></select><button id="btnBulkMove" data-icon="folder">Mover</button><button id="btnBulkDel" class="danger" data-icon="trash">Borrar</button>
+    </div>
+    <div class="scroll"><table><thead><tr><th><input type="checkbox" id="chkAll" title="Marcar todos"></th><th></th><th>Nombre</th><th>Categoría</th><th>Estado</th><th>Guía</th></tr></thead><tbody id="chanBody"></tbody></table></div>
+  </section>
+
+  <section id="s-health">
+    <h2>Revisión automática</h2>
+    <p class="hint">Prueba todos tus guardados en segundo plano (la misma prueba del buscador) y te avisa cuáles se cayeron. Si al link se le venció el token o está por vencer, abre su página en una pestaña de fondo y lo renueva solo; tu lista publicada se actualiza sola.</p>
+    <label class="row"><span>Revisar cada</span>
+      <select id="optHealthEvery"><option value="0">Apagada</option><option value="15">15 minutos</option><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="360">6 horas</option></select></label>
+    <label class="row"><span>Renovar links vencidos</span><input type="checkbox" id="optHealthRenew"> <span class="status">abre la página del canal (máx. 3 por revisión)</span></label>
+    <div class="bar"><button id="btnHealthNow" class="primary" data-icon="refresh">Revisar ahora</button><span class="status" id="healthStatus"></span></div>
+  </section>
+
+  <section id="s-list">
+    <h2>Lista publicada y guía de programación</h2>
+    <p class="hint">Tu lista y la página del celular se publican en tu Gist secreto de GitHub (se conecta desde el popup, en Guardados).</p>
+    <div class="links" id="pubLinks"></div>
+    <label class="row"><span>Página para el celular</span><input type="checkbox" id="optMobile"> <span class="status">publica <code>canales.html</code>: tus canales por categoría con logo, estado y botón de reproducir que abre CarTV/VLC</span></label>
+    <label class="row"><span>Guía EPG (XMLTV)</span><input type="url" id="optEpg" class="grow" placeholder="https://…/guia.xml o .xml.gz" spellcheck="false"></label>
+    <p class="hint">Con una guía, CarTV y TiviMate muestran qué están dando en cada canal. Pega la dirección de una guía XMLTV (la da tu proveedor o un servicio de guías). Cada canal se une a la guía por su identificador (<code>tvg-id</code>): los que encuentras con Buscar ya lo traen; para el resto usa el botón.</p>
+    <div class="bar"><button id="btnGuide" data-icon="list">Asignar identificador de guía a mis canales</button><span class="status" id="guideStatus"></span></div>
+  </section>
+
+  <section id="s-brave">
+    <h2>Buscador web (Brave)</h2>
+    <p class="hint">Cuando el directorio y el sitio oficial no alcanzan, el buscador revisa los primeros resultados de la web (hasta completar los «Links a probar» que eliges en el popup). Con una clave de Brave Search API esos resultados salen del buscador de Brave, de forma oficial y estable; sin clave se usa DuckDuckGo/Bing como respaldo.</p>
+    <label class="row"><span>Clave de Brave Search API</span><input type="password" id="optBraveKey" class="grow" placeholder="BSA…" spellcheck="false"></label>
+    <div class="bar"><span class="status" id="braveStatus"></span></div>
+    <details><summary>Cómo conseguir la clave</summary><ol>
+      <li>Entra a <b>brave.com/search/api</b> y crea una cuenta.</li>
+      <li>Elige el plan gratuito o el de menor costo (revisa los límites actuales).</li>
+      <li>En el panel, copia tu «API key» y pégala aquí. Se guarda solo en este navegador y no va en la copia de seguridad.</li>
+    </ol></details>
+  </section>
+
+  <section id="s-relay">
+    <h2>Sincronización y puente con el iPhone</h2>
+    <p class="hint">La app <b>Listas M3U</b> del iPhone le puede pedir a esta extensión que busque un canal o que saque el video de una página (Safari no puede abrir otras páginas por detrás; Chrome sí). Usa el mismo GitHub de tu lista publicada: conecta el mismo usuario en la app. Necesita el computador prendido con Chrome abierto.</p>
+    <label class="row"><span>Sincronizar mis canales</span><input type="checkbox" id="optSync"> <span class="status">Guardados y categorías iguales en el computador y en el iPhone, aunque el computador esté apagado</span></label>
+    <div class="bar"><button id="btnSyncNow" data-icon="refresh">Sincronizar ahora</button><span class="status" id="syncStatus"></span></div>
+    <label class="row"><span>Atender encargos del iPhone</span><input type="checkbox" id="optRelay"> <span class="status">buscar o extraer con el motor del computador · revisa cada 30 segundos</span></label>
+    <div class="bar"><button id="btnRelayNow" data-icon="refresh">Revisar ahora</button><span class="status" id="relayStatus"></span></div>
+  </section>
+
+  <section id="s-prod">
+    <h2>Modo producción (+4dBu)</h2>
+    <p class="hint">Cuando un monitor detecta que un directo se cae o se recupera, además del aviso en el computador te llega un mensaje. También te llegan las caídas que encuentre la revisión automática.</p>
+    <label class="row"><span>Evento actual</span><input type="text" id="optEvent" class="grow" placeholder="p. ej. Concierto Movistar Arena 28/09" maxlength="80"></label>
+    <label class="row"><span>Telegram · token del bot</span><input type="password" id="optTgToken" class="grow" placeholder="123456:ABC…" spellcheck="false"></label>
+    <label class="row"><span>Telegram · chat id</span><input type="text" id="optTgChat" placeholder="p. ej. 123456789" spellcheck="false"></label>
+    <label class="row"><span>WhatsApp (CallMeBot) · número</span><input type="text" id="optCmbPhone" placeholder="+57300…" spellcheck="false"></label>
+    <label class="row"><span>WhatsApp (CallMeBot) · apikey</span><input type="password" id="optCmbKey" placeholder="apikey" spellcheck="false"></label>
+    <div class="bar"><button id="btnTestAlert" class="primary" data-icon="bell">Enviar mensaje de prueba</button><span class="status" id="alertStatus"></span></div>
+    <details><summary>Cómo configurarlo</summary><ol>
+      <li><b>Telegram:</b> en Telegram habla con <b>@BotFather</b> → <code>/newbot</code> → copia el token. Escríbele cualquier cosa a tu bot y luego abre <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code>: el número en <code>"chat":{"id":…}</code> es tu chat id.</li>
+      <li><b>WhatsApp:</b> CallMeBot es un servicio gratuito de terceros. Sigue las instrucciones de <b>callmebot.com</b> (sección WhatsApp) para autorizar tu número y recibir tu apikey.</li>
+      <li>Los tokens y claves se guardan solo en este navegador y no van en la copia de seguridad.</li>
+    </ol></details>
+  </section>
+
+  <section id="s-hist">
+    <h2>Historial de caídas</h2>
+    <p class="hint">Cada caída que detecta el monitor, con su evento, hora y duración. Descárgalo como reporte para el cliente.</p>
+    <div class="bar"><select id="histFilter"></select><span class="status" id="histSum"></span><span style="flex:1"></span><button id="btnHistCsv" data-icon="download">Descargar reporte (.csv)</button><button id="btnHistClear" class="danger" data-icon="trash">Borrar historial</button></div>
+    <div class="scroll"><table><thead><tr><th>Evento</th><th>Canal</th><th>Tipo</th><th>Inicio</th><th>Duración</th></tr></thead><tbody id="histBody"></tbody></table></div>
+  </section>
+
+  <section id="s-backup">
+    <h2>Copia de seguridad</h2>
+    <p class="hint">Guarda en un archivo tus canales, categorías y ajustes (sin tokens ni claves). Sirve para pasarlos a otro computador.</p>
+    <div class="bar"><button id="btnBackup" class="primary" data-icon="download">Descargar copia (.json)</button>
+      <button id="btnRestore" data-icon="upload">Restaurar copia…</button>
+      <label class="row" style="margin:0"><input type="checkbox" id="restoreReplace"> <span class="status">reemplazar todo (si no, solo agrega lo que falte)</span></label>
+      <input type="file" id="fileRestore" accept=".json,application/json" hidden></div>
+    <div class="status" id="backupStatus"></div>
+  </section>
+</div>
+<script src="lib/common.js"></script>
+<script src="lib/icons.js"></script>
+<script src="options.js"></script>
+</body>
+</html>
