@@ -14,19 +14,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Avisar a tu página que ya arrancó
+        run: |
+          curl -s -m 10 -X POST -H "content-type: application/json" \
+            --data '{"status":"running","step":"GitHub arrancó: preparando Chrome con tu extensión…"}' \
+            "${{ inputs.page }}/gh/avance?id=${{ inputs.id }}&t=${{ inputs.t }}" || true
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Chrome (guardado entre búsquedas para que arranque rápido)
+      # Rápido: Chrome y las piezas quedan guardados entre búsquedas (no se descargan cada vez)
+      - name: Chrome guardado
+        id: pw
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: chrome-${{ runner.os }}-pw-1.56.1
+      - name: Piezas guardadas
+        id: nm
+        uses: actions/cache@v4
+        with:
+          path: runner/node_modules
+          key: nm-${{ runner.os }}-${{ hashFiles('runner/package.json') }}
       - name: Preparar
         working-directory: runner
         run: |
-          npm install --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          [ -d node_modules/playwright ] || npm install --no-audit --no-fund
+          [ -d ~/.cache/ms-playwright ] && ls ~/.cache/ms-playwright | grep -q chromium || npx playwright install chromium
+          # las librerías del sistema solo si Chrome no arranca sin ellas (casi nunca hace falta)
+          node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch();await b.close()}).catch(()=>process.exit(1))" || npx playwright install-deps chromium
       - name: Buscar con tu extensión
         working-directory: runner
         env:
