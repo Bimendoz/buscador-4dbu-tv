@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HLS Stream Detector (Educativo)",
-  "version": "5.4.0",
+  "version": "5.4.1",
   "description": "Detecta videos en vivo (HLS, DASH), videos de las páginas y directos de YouTube; los analiza, los monitorea y los reúne en un solo link de lista M3U.",
   "minimum_chrome_version": "116",
   "permissions": [
