@@ -16,7 +16,7 @@ else if (PAGE) {
 }
 // en un repositorio público nada de esto se imprime: sin direcciones, nombres ni claves en los registros
 console.log = () => {}; console.error = () => {};
-const MAX_MIN = +(process.env.MAX_MIN || 55);
+const MAX_MIN = +(process.env.MAX_MIN || 340); // GitHub deja hasta 6 horas por búsqueda
 
 let cancel = false;
 const send = async (data) => {
@@ -56,20 +56,47 @@ if (job.mode === "fuente") {
   }).catch(() => {}); };
   const domVideos = async (pg, src) => { for (const f of pg.frames()) { const vs = await f.evaluate(() => [...document.querySelectorAll("video, video source, source")].map((v) => v.currentSrc || v.src).filter(Boolean)).catch(() => []); for (const v of vs) add(v, pg.url(), pg.url(), src); } };
   // abrir una página de video: darle play y anotar lo que pide el reproductor
-  const openVideo = async (u, src, label) => {
-    if (cancel) return;
+  // los servidores del video: iframes y botones «Servidor 1, 2…» (data-src, data-video…), en CUALQUIER dominio
+  const AD = /(doubleclick|googlesyndication|imasdk|adservice|adsystem|googletagmanager|google-analytics|youtube\.com|facebook\.com|twitter\.com)/i;
+  const servers = async (pg) => {
+    const urls = new Set();
+    for (const f of pg.frames()) {
+      const xs = await f.evaluate(() => [...document.querySelectorAll("iframe[src], [data-src], [data-video], [data-url], [data-embed], [data-link], [data-player], [data-server], [data-iframe], [data-file], [data-stream]")]
+        .map((e) => e.tagName === "IFRAME" ? e.getAttribute("src") : (e.dataset.src || e.dataset.video || e.dataset.url || e.dataset.embed || e.dataset.link || e.dataset.player || e.dataset.server || e.dataset.iframe || e.dataset.file || e.dataset.stream))).catch(() => []);
+      for (let x of xs) {
+        if (!x) continue;
+        if (!/^(https?:)?\/\/|^\//i.test(x) && /^[A-Za-z0-9+/=]{16,}$/.test(x)) { try { const d = Buffer.from(x, "base64").toString("utf8"); if (/^https?:\/\//i.test(d)) x = d; } catch {} }
+        try { const u = new URL(x, f.url()); if (/^https?:$/.test(u.protocol) && !AD.test(u.href) && !/\.(jpe?g|png|gif|svg|webp|css|js)(\?|$)/i.test(u.pathname)) urls.add(u.href); } catch {}
+      }
+    }
+    return [...urls];
+  };
+  // botones de servidor que solo cambian el reproductor al tocarlos
+  const clickServers = async (pg, src) => {
+    const btns = pg.locator("li, button, a, span, div").filter({ hasText: /^\s*(servidor|server|opci[oó]n|option|reproductor|player|mirror|enlace)\b.{0,25}$/i });
+    const n = await btns.count().catch(() => 0);
+    for (let i = 0; i < n && !cancel; i++) { await btns.nth(i).click({ timeout: 3000 }).catch(() => {}); await pg.waitForTimeout(2500); await autoplay(pg); await domVideos(pg, src); }
+  };
+  const opened = new Set();
+  const openVideo = async (u, src, label, depth = 0) => {
+    if (cancel || opened.has(u)) return; opened.add(u);
     await step(label);
     const p2 = await ctx.newPage(); watch(p2, src);
     const before = out.found.length, t0 = Date.now();
+    let more = [];
     try {
       await p2.goto(u, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
       while (Date.now() - t0 < 16000 && !cancel) {
         await p2.waitForTimeout(1500); await autoplay(p2); await domVideos(p2, src);
         if (out.found.length > before && Date.now() - t0 > 6000) break;
       }
+      if (out.found.length === before) await clickServers(p2, src);
+      if (out.found.length === before && depth < 3) more = await servers(p2);
     } catch {}
     out.tried++; out.pages.push({ url: u, found: out.found.length - before });
     await p2.close().catch(() => {});
+    // nada todavía: se abre cada servidor por separado (iframes que no arrancan dentro de la página)
+    for (const [i, s] of more.entries()) { if (cancel || out.found.length > before) break; await openVideo(s, src, `${label} · servidor ${i + 1} de ${more.length}: ${new URL(s).host}`, depth + 1); }
   };
   const sameDom = (u, dom) => { try { const h = new URL(u).hostname.toLowerCase(); return !dom || h === dom || h.endsWith("." + dom); } catch { return false; } };
   try {
@@ -101,10 +128,10 @@ if (job.mode === "fuente") {
         for (const l of links) if (isVid(l.u)) add(l.u, pg.url(), pg.url(), f.name);
         const qw = norm(q).split(" ").filter((w) => w && !STOP.has(w));
         const here = pg.url().split("#")[0];
-        const cand = [...new Map(links.filter((l) => /^https?:/i.test(l.u) && !isVid(l.u) && sameDom(l.u, f.dom) && l.u.split("#")[0] !== here
+        const cand = [...new Map(links.filter((l) => /^https?:/i.test(l.u) && !isVid(l.u) && !AD.test(l.u) && l.u.split("#")[0] !== here /* cualquier servidor, no solo el de tu sitio */
             && !/\/(tag|tags|category|categoria|genero|genre|page|pagina|login|register|registro|account|cuenta|contact|contacto|privacy|feed)(\/|$)/i.test(new URL(l.u).pathname))
           .map((l) => { const txt = " " + norm(l.t + " " + decodeURIComponent(new URL(l.u).pathname)) + " "; return { ...l, hits: qw.filter((w) => txt.includes(" " + w + " ")).length }; })
-          .filter((l) => l.hits).sort((a, b) => b.hits - a.hits).map((l) => [l.u.split("#")[0], l])).values()].slice(0, +job.max || 8);
+          .filter((l) => l.hits).sort((a, b) => b.hits - a.hits).map((l) => [l.u.split("#")[0], l])).values()].slice(0, +job.max > 0 ? +job.max : Infinity); // 0 = todos los resultados de tu sitio
         out.pages.push({ url: pg.url(), q, results: cand.length });
         await pg.close().catch(() => {});
         for (const [i, c] of cand.entries()) await openVideo(c.u, f.name, `★ ${f.name}: «${q}» · abriendo resultado ${i + 1} de ${cand.length}: ${c.t.trim().slice(0, 60) || c.u.slice(0, 60)}`);
@@ -173,7 +200,7 @@ await sw.evaluate((j) => {
       const walked = new Set();
       // 1) la web, en su orden
       pub({ ...agg, step: "Buscando el canal en la web…" });
-      const web = await webResults(langQuery(query, mode, countries), "", Number.isFinite(N) ? Math.max(30, N * 3) : 100).catch(() => []);
+      const web = await webResults(langQuery(query, mode, countries), "", Number.isFinite(N) ? Math.max(30, N * 3) : 1000).catch(() => []);
       agg.web = { got: web.length };
       for (const [i, site] of web.entries()) {
         if (enough()) break;
