@@ -1,0 +1,38 @@
+# +4dBu TV · tu buscador (la extensión tal cual) corriendo en un Chrome de GitHub.
+# Lo enciende tu página cuando buscas un canal. No hay que tocar nada aquí.
+name: buscar
+on:
+  workflow_dispatch:
+    inputs:
+      id: { description: "búsqueda", required: true }
+      t: { description: "llave de esa búsqueda", required: true }
+      page: { description: "tu página", required: true }
+      job: { description: "qué buscar (base64)", required: true }
+run-name: "Buscar ${{ inputs.id }}"
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Chrome (guardado entre búsquedas para que arranque rápido)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: chrome-${{ runner.os }}-pw-1.56.1
+      - name: Preparar
+        working-directory: runner
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Buscar con tu extensión
+        working-directory: runner
+        env:
+          EXT_DIR: ${{ github.workspace }}/extension
+          TV_URL: ${{ inputs.page }}
+          JOB_ID: ${{ inputs.id }}
+          JOB_T: ${{ inputs.t }}
+          JOB: ${{ inputs.job }}
+        run: node buscar.mjs
