@@ -221,7 +221,7 @@ async function restore(file) {
 // ---------- ajustes ligados a campos ----------
 function bindSettings() {
   const map = { optBraveKey: "braveKey", optSync: "syncOn", optRelay: "relayOn", optHealthEvery: "healthEvery", optHealthRenew: "healthRenew", optMobile: "mobilePage", optEpg: "epgUrl",
-    optEvent: "eventName", optTgToken: "tgToken", optTgChat: "tgChat", optCmbPhone: "cmbPhone", optCmbKey: "cmbKey" };
+    optEvent: "eventName", optTvUrl: "tvUrl", optTvKey: "tvKey", optTgToken: "tgToken", optTgChat: "tgChat", optCmbPhone: "cmbPhone", optCmbKey: "cmbKey" };
   for (const [id, prop] of Object.entries(map)) {
     const e = $(id);
     if (e.type === "checkbox") e.checked = !!S.settings[prop];
@@ -295,6 +295,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     setStatus("alertStatus", [ok, ...(r?.errors || [])].filter(Boolean).join(" · "), r?.errors?.length ? "err" : "ok");
   };
   $("btnHistCsv").onclick = histCsv;
+  $("btnTvTest").onclick = async () => {
+    const u = (S.settings.tvUrl || "").trim().replace(/\/+$/, ""), k = (S.settings.tvKey || "").trim();
+    if (!/^https:\/\//i.test(u) || !k) return setStatus("tvStatus", "Pega la dirección (https://…) y la clave del puente.", "err");
+    setStatus("tvStatus", "Probando…");
+    try {
+      const r = await fetch(`${u}/entrada?k=${encodeURIComponent(k)}`, { cache: "no-store" });
+      setStatus("tvStatus", r.ok ? "✓ Conectado: ya puedes enviar desde el popup." : r.status === 401 ? "✗ La clave del puente no es la de tu +4dBu TV." : r.status === 404 ? "✗ Tu +4dBu TV aún no tiene esta función: publícalo de nuevo con PUBLICAR.bat." : `✗ Respondió ${r.status}`, r.ok ? "ok" : "err");
+    } catch (e) { setStatus("tvStatus", "✗ No respondió: revisa la dirección.", "err"); }
+  };
   $("btnSyncNow").onclick = async () => { setStatus("syncStatus", "Sincronizando…"); await chrome.runtime.sendMessage({ action: "syncNow" }).catch(() => {}); };
   $("btnRelayNow").onclick = async () => { setStatus("relayStatus", "Revisando…"); await chrome.runtime.sendMessage({ action: "relayNow" }).catch(() => {}); };
   $("histFilter").onchange = renderHist;
