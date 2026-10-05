@@ -135,6 +135,14 @@
     <div class="bar"><button id="btnRelayNow" data-icon="refresh">Revisar ahora</button><span class="status" id="relayStatus"></span></div>
   </section>
 
+  <section id="s-tv">
+    <h2>+4dBu TV</h2>
+    <p class="hint">Con esto, el botón <b>«A +4dBu TV»</b> del popup (en Pestaña y en Guardados) envía lo detectado directo a tu +4dBu TV, a la categoría que elijas. Aparece en tus favoritos (iPhone, PC y TV) en menos de un minuto. Los dos datos están en tu +4dBu TV → <b>Detector</b> → «Recibidos de tu extensión» (botones «Copiar dirección» y «Copiar clave del puente»).</p>
+    <label class="row"><span>Dirección de tu +4dBu TV</span><input type="url" id="optTvUrl" class="grow" placeholder="https://mas4dbu-tv.….workers.dev" spellcheck="false"></label>
+    <label class="row"><span>Clave del puente</span><input type="password" id="optTvKey" class="grow" placeholder="la clave de tu archivo .clave" spellcheck="false"></label>
+    <div class="bar"><button id="btnTvTest" class="primary" data-icon="check">Probar conexión</button><span class="status" id="tvStatus"></span></div>
+  </section>
+
   <section id="s-prod">
     <h2>Modo producción (+4dBu)</h2>
     <p class="hint">Cuando un monitor detecta que un directo se cae o se recupera, además del aviso en el computador te llega un mensaje. También te llegan las caídas que encuentre la revisión automática.</p>
