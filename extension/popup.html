@@ -130,6 +130,15 @@
 
     footer { display: flex; gap: 5px; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--panel); }
     footer[hidden] { display: none; }
+    /* enviar a +4dBu TV */
+    button.b.tvb { color: #2ee59d; border-color: color-mix(in srgb, #2ee59d 45%, var(--line2)); }
+    #tvSend { border-top: 1px solid var(--line); background: var(--panel); padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+    #tvSend[hidden] { display: none; }
+    #tvSend .tvh { display: flex; align-items: center; gap: 6px; font: 700 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: #2ee59d; }
+    #tvSend input { font: inherit; padding: 6px 8px; border: 1px solid var(--line2); border-radius: 3px; background: var(--bg); color: var(--text); }
+    #tvSend .row { display: flex; gap: 5px; }
+    #tvSend .tvst { font: 10.5px/1.4 var(--mono); color: var(--muted); }
+    #tvSend .tvst.ok { color: var(--green); } #tvSend .tvst.err { color: var(--red); }
 
     /* link único publicado */
     .pub { background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--accent); border-radius: 4px; padding: 10px; margin-bottom: 10px; }
@@ -227,15 +236,18 @@
   </section>
 
   <main id="lista"></main>
+  <section id="tvSend" hidden></section>
 
   <footer id="footThis">
     <button class="b" id="btnCopyAll" data-icon="copy">Copiar todo (M3U)</button>
     <button class="b" id="btnExport" data-icon="download">Exportar .m3u</button>
+    <button class="b tvb" id="btnTvSend" data-icon="cast" title="Enviar lo detectado a tu +4dBu TV">A +4dBu TV</button>
     <button class="b danger" id="btnClear" data-icon="trash">Limpiar</button>
   </footer>
   <footer id="footSaved" hidden>
     <button class="b" id="btnExportSaved" data-icon="download">Exportar .m3u</button>
     <button class="b" id="btnImport" data-icon="upload">Importar .m3u</button>
+    <button class="b tvb" id="btnTvSendSaved" data-icon="cast" title="Enviar tus guardados (o la categoría que estás viendo) a tu +4dBu TV">A +4dBu TV</button>
     <button class="b danger" id="btnClearSaved" data-icon="trash">Vaciar</button>
     <input type="file" id="fileImport" accept=".m3u,.m3u8,audio/x-mpegurl,text/plain" hidden>
   </footer>
