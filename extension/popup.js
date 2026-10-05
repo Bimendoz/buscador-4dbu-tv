@@ -877,6 +877,41 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   $("btnCopyAll").onclick = (e) => copy(m3uFile(tabEntries(), state.settings), e.currentTarget);
   $("btnExport").onclick = () => download(m3uFile(tabEntries(), state.settings), safeFile(cleanTitle(state.tabTitle) || "hls_lista") + ".m3u");
+  // enviar a +4dBu TV: la lista va a tu página (Cloudflare) y tu +4dBu TV la agrega a tus favoritos solo
+  const openTvSend = (getEntries, what) => {
+    const box = $("tvSend"), s = state.settings || {};
+    if (!box.hidden && box.dataset.what === what) { box.hidden = true; return; }
+    box.dataset.what = what;
+    const head = el("div", { className: "tvh" }, icon("cast", 14), el("span", { textContent: "Enviar a +4dBu TV" }));
+    if (!s.tvUrl || !s.tvKey) {
+      box.replaceChildren(head, el("div", { className: "tvst", textContent: "Falta conectar tu +4dBu TV: Más opciones → «+4dBu TV» (dirección y clave del puente)." }),
+        el("div", { className: "row" }, btn(["settings", "Abrir Más opciones"], () => chrome.runtime.openOptionsPage(), "b primary"), btn("Cerrar", () => { box.hidden = true; })));
+      box.hidden = false; return;
+    }
+    const n = getEntries().length;
+    const dl = el("datalist", { id: "tvCats" }); for (const c of state.categories || []) dl.append(el("option", { value: c }));
+    const inp = el("input", { type: "text", placeholder: "Categoría en +4dBu TV (vacío = la que ya tenga cada uno)", value: s.tvLastGroup || "" }); inp.setAttribute("list", "tvCats");
+    const st = el("div", { className: "tvst", textContent: n ? `${n} elemento(s) de ${what}.` : "No hay nada para enviar." });
+    const go = btn(["cast", `Enviar ${n}`], async () => {
+      const entries = getEntries(); if (!entries.length) return;
+      go.disabled = true; st.className = "tvst"; st.textContent = "Enviando…";
+      try {
+        const r = await fetch(`${s.tvUrl.trim().replace(/\/+$/, "")}/entrada?k=${encodeURIComponent(s.tvKey.trim())}`, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ m3u: m3uFile(entries, s), group: inp.value.trim(), from: state.view === "tab" ? (state.tabTitle || "") : "Guardados de la extensión" }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(r.status === 401 ? "la clave del puente no coincide" : r.status === 404 ? "publica tu +4dBu TV de nuevo (PUBLICAR.bat)" : d.error || "respondió " + r.status);
+        st.className = "tvst ok"; st.textContent = `✓ Enviado (${entries.length}). Aparece en tu +4dBu TV en menos de un minuto.`;
+        const { settings: cur = {} } = await chrome.storage.local.get("settings");
+        await chrome.storage.local.set({ settings: { ...cur, tvLastGroup: inp.value.trim() } });
+      } catch (e) { st.className = "tvst err"; st.textContent = "✗ No se pudo: " + (e.message || e); }
+      go.disabled = false;
+    }, "b primary");
+    go.disabled = !n;
+    box.replaceChildren(head, dl, inp, el("div", { className: "row" }, go, btn("Cerrar", () => { box.hidden = true; })), st);
+    box.hidden = false; inp.focus();
+  };
+  $("btnTvSend").onclick = () => openTvSend(tabEntries, "esta pestaña");
+  $("btnTvSendSaved").onclick = () => openTvSend(() => sortByCategory(state.filter ? state.favorites.filter((f) => groupFor(f) === state.filter) : state.favorites, state.categories).map((f) => m3uFor(f, state.settings)), state.filter ? `«${state.filter}»` : "tus guardados");
   $("btnClear").onclick = () => { if (state.tabId != null) chrome.runtime.sendMessage({ action: "clearStreams", tabId: state.tabId }); };
 
   // pie: guardados
