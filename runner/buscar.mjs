@@ -36,6 +36,28 @@ const launchChrome = async (opts) => {
   catch { BROWSER_NAME = "chromium"; return chromium.launch(opts); }
 };
 
+const START = Date.now();
+// RELEVO (relevo.mjs): elige la lista del video que pidió el reproductor de la fuente ganadora, pausa el Chrome y
+// abre el túnel. Avisa a tu página con {type:"relay", url} (o {ok:false, why} si no se pudo).
+async function relayFor(r, ctx, page, UA, emit) {
+  const win = (r.results || []).find((x) => x.status === "working");
+  const media = (win?.media || []).filter((m) => !/\.(ts|m4s|aac|vtt|key)(\?|#|$)|\/init[^/?#]*\.mp4(\?|#|$)/i.test(m.url) && !(m.status >= 400));
+  const lists = media.filter((m) => m.type === "manifest" && /\.m3u8|mpegurl/i.test(m.url + " " + (m.ct || "")));
+  const pick = lists.find((m) => /master/i.test(m.url)) || lists[0] || media.find((m) => /\.(mp4|m4v|webm)(\?|#|$)/i.test(m.url) || /^video\//i.test(m.ct || ""));
+  if (!pick) { emit({ type: "relay", ok: false, why: "no vi la lista del video de esa fuente" }); return null; }
+  emit({ type: "relay-start" });
+  for (const f of page.frames()) await f.evaluate(() => document.querySelectorAll("video").forEach((v) => { v.pause(); })).catch(() => {});
+  try {
+    const { startRelay } = await import("./relevo.mjs");
+    const rl = await startRelay({ ctx, referer: pick.referer || pick.frame || "", ua: UA });
+    const chk = await fetch(rl.local(pick.url), { headers: { range: "bytes=0-2047" } }).catch(() => null);
+    const body = chk ? await chk.text().catch(() => "") : "";
+    if (!chk || chk.status >= 400) { rl.close(); emit({ type: "relay", ok: false, why: "el servidor no le entregó el video al relevo (" + (chk ? chk.status : "sin respuesta") + ")" }); return null; }
+    emit({ type: "relay", ok: true, url: rl.url(pick.url), kind: body.trimStart().startsWith("#EXTM3U") ? "hls" : "file", host: new URL(pick.url).host });
+    return rl;
+  } catch (e) { emit({ type: "relay", ok: false, why: String(e?.message || e).slice(0, 160) }); return null; }
+}
+
 // ---------- MODO «TÍTULO»: probar TODAS las fuentes de un título en UNA sola sesión, en orden ----------
 // Es el navegador del explorador (ya no el de Cloudflare): mismo explorar.js que usa tu página. Abre el título,
 // toca cada fuente (clic real), sigue iframe / pestaña nueva / navegación, da clic en el centro del reproductor y
@@ -59,8 +81,18 @@ if (job.mode === "titulo") {
     const page = await ctx.newPage();
     emit({ type: "preflight", ok: true, browser: "github-" + BROWSER_NAME });
     const r = await probarTitulo(page, { url: job.url, sources: job.sources || [], code, totalMs: job.ms || 10000, emit });
+    // RELEVO: la fuente que funcionó se le pasa a tu reproductor desde ESTE computador (su link va amarrado a esta red)
+    const relay = job.relay && r.status === "working" ? await relayFor(r, ctx, page, UA, emit) : null;
     emit({ type: "done", ...r, results: undefined });
     finished = true; await flush("done");
+    if (relay) { // sigue encendido mientras lo ves; se apaga solo tras 30 min sin pedidos (o si lo cancelas)
+      for (;;) {
+        await new Promise((ok) => setTimeout(ok, 30000));
+        await flush("done");
+        if (cancel || relay.idle() > 30 * 60e3 || Date.now() - START > MAX_MIN * 60e3) break;
+      }
+      relay.close();
+    }
     await browser.close().catch(() => {});
   } catch (e) {
     emit({ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", sourceTested: false, selected_source: null, detail: String(e?.message || e).slice(0, 160) });
@@ -92,7 +124,7 @@ if (job.mode === "fuente") {
   const step = async (t) => { out.step = t; await send({ status: "running", job: out }); };
   const autoplay = async (pg) => { for (const f of pg.frames()) await f.evaluate(() => {
     for (const v of document.querySelectorAll("video")) { v.muted = true; v.play().catch(() => {}); }
-    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i], [class*=captcha i] button, [class*=gate i] button");
+    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i], [class*=captcha i] button, button[class*=gate__ i]");
     if (b && [...document.querySelectorAll("video")].every((v) => v.paused)) b.click();
   }).catch(() => {}); };
   const domVideos = async (pg, src) => { for (const f of pg.frames()) { const vs = await f.evaluate(() => [...document.querySelectorAll("video, video source, source")].map((v) => v.currentSrc || v.src).filter(Boolean)).catch(() => []); for (const v of vs) add(v, pg.url(), pg.url(), src); } };
