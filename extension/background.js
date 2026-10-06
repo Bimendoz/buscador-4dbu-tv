@@ -1,6 +1,6 @@
 // HLS Stream Detector — service worker (Manifest V3)
 // Estado por pestaña en chrome.storage.session: sobrevive a que Chrome duerma el service worker.
-importScripts("lib/common.js", "lib/icons.js", "lib/lang.js", "lib/search.js", "lib/scan.js", "lib/health.js", "lib/relay.js", "lib/sync.js");
+importScripts("lib/common.js", "lib/icons.js", "lib/lang.js", "lib/search.js", "lib/scan.js", "lib/health.js", "lib/relay.js", "lib/sync.js", "lib/recorder.js");
 
 const MAX_PER_TAB = 100;
 const reqHeaders = new Map(); // requestId -> { referer, origin }, solo mientras dura la petición
@@ -15,6 +15,11 @@ async function getTab(tabId) {
   return (await chrome.storage.session.get(k))[k] || { streams: [] };
 }
 function setBadge(tabId, count) {
+  if (recOn(tabId)) { // grabando pasos en esta pestaña (lib/recorder.js)
+    chrome.action.setBadgeText({ tabId, text: "REC" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#ff3b30" }).catch(() => {});
+    return;
+  }
   chrome.action.setBadgeText({ tabId, text: count ? String(count) : "" }).catch(() => {});
   chrome.action.setBadgeBackgroundColor({ tabId, color: "#e5484d" }).catch(() => {});
 }
@@ -245,7 +250,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => runAction(info.menuItemId, tab));
 
 // Atajos de teclado (configurables en chrome://extensions/shortcuts)
-chrome.commands.onCommand.addListener((command, tab) => runAction(command, tab));
+chrome.commands.onCommand.addListener((command, tab) => (command === "rec-toggle" ? recToggle(tab) : runAction(command, tab)));
 
 // Clic en una alerta del monitor -> ir a esa pestaña
 chrome.notifications.onClicked.addListener((id) => {
