@@ -21,6 +21,31 @@ export async function startRelay({ ctx, referer = "", ua, log = () => {}, port =
   const enc = (u) => Buffer.from(u).toString("base64url"), dec = (s) => Buffer.from(s, "base64url").toString();
   const via = (u, b) => { const abs = new URL(u, b).href; return `${base}/h/${K}/${enc(abs)}.${(abs.match(EXT) || [, "bin"])[1].toLowerCase()}`; };
   const origin = (() => { try { return new URL(referer).origin; } catch { return ""; } })();
+  const headersFor = async (target, range = "") => {
+    const cookies = (await ctx.cookies(target).catch(() => [])).map((c) => `${c.name}=${c.value}`).join("; ");
+    const h = { "user-agent": ua, accept: "*/*", "accept-language": "es-CO,es;q=0.9,en;q=0.5" };
+    if (referer) h.referer = referer;
+    if (origin) h.origin = origin;
+    if (cookies) h.cookie = cookies;
+    if (range) h.range = range;
+    return h;
+  };
+  // PEDAZOS POR ADELANTADO: mientras ves un pedazo, este computador ya va bajando los 4 siguientes. Así el túnel
+  // nunca hace esperar al reproductor (sin esto arranca, se frena un poquito y sigue).
+  const AHEAD = 4, CACHE_MAX = 250e6;
+  const cache = new Map(); let cacheBytes = 0, order = [], pos = new Map();
+  const grab = (u) => headersFor(u).then((h) => fetch(u, { headers: h, redirect: "follow" })).then(async (r) => {
+    const buf = Buffer.from(await r.arrayBuffer()); cacheBytes += buf.length;
+    return { status: r.status, ct: r.headers.get("content-type") || "", buf };
+  });
+  const prefetch = (i) => {
+    for (let k = 1; k <= AHEAD; k++) { const u = order[i + k]; if (u && !cache.has(u)) cache.set(u, grab(u).catch(() => null)); }
+    // se sueltan los pedazos ya vistos (y lo más viejo si se pasa del tope)
+    for (const [u, pr] of cache) {
+      const j = pos.get(u);
+      if ((j != null && j < i - 1) || cacheBytes > CACHE_MAX) { cache.delete(u); pr.then((x) => { if (x) cacheBytes -= x.buf.length; }); }
+    }
+  };
   const server = http.createServer(async (req, res) => {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); return res.end(); }
     if (req.url === `/ping/${K}`) { last = Date.now(); res.writeHead(200, { ...CORS, "content-type": "text/plain" }); return res.end("ok"); }
@@ -29,18 +54,30 @@ export async function startRelay({ ctx, referer = "", ua, log = () => {}, port =
     last = Date.now(); served++;
     let target; try { target = dec(m[2]); new URL(target); } catch { res.writeHead(400, CORS); return res.end(); }
     try {
-      const cookies = (await ctx.cookies(target).catch(() => [])).map((c) => `${c.name}=${c.value}`).join("; ");
-      const h = { "user-agent": ua, accept: "*/*", "accept-language": "es-CO,es;q=0.9,en;q=0.5" };
-      if (referer) h.referer = referer;
-      if (origin) h.origin = origin;
-      if (cookies) h.cookie = cookies;
-      if (req.headers.range) h.range = req.headers.range;
-      const up = await fetch(target, { headers: h, redirect: "follow" });
+      // pedazo que ya se bajó por adelantado (o se está bajando): sale de inmediato
+      const idx = pos.get(target);
+      if (idx != null && !req.headers.range) {
+        if (!cache.has(target)) cache.set(target, grab(target).catch(() => null));
+        const got = await cache.get(target);
+        prefetch(idx);
+        if (got && got.status < 400) {
+          res.writeHead(got.status, { ...CORS, "content-type": got.ct || "video/mp2t", "content-length": String(got.buf.length) });
+          return res.end(got.buf);
+        }
+        cache.delete(target); // falló el adelantado: se pide normal
+      }
+      const up = await fetch(target, { headers: await headersFor(target, req.headers.range || ""), redirect: "follow" });
       const ct = up.headers.get("content-type") || "";
       if (up.ok && req.method !== "HEAD" && (/mpegurl/i.test(ct) || /\.m3u8(\?|#|$)/i.test(target))) {
         const text = await up.text();
         if (text.replace(/^﻿/, "").trimStart().startsWith("#EXTM3U")) {
           const final = up.url || target;
+          // lista de pedazos (no la maestra): se anota el orden para bajarlos por adelantado
+          if (/#EXTINF/i.test(text)) {
+            order = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).map((l) => { try { return new URL(l, final).href; } catch { return ""; } }).filter(Boolean);
+            pos = new Map(order.map((u, i) => [u, i]));
+            if (!cache.size) prefetch(-1); // los primeros, antes de que el reproductor los pida
+          }
           const out = text.split(/\r?\n/).map((line) => {
             const l = line.trim(); if (!l) return line;
             if (l.startsWith("#")) return line.replace(/URI="([^"]+)"/g, (_x, u) => `URI="${via(u, final)}"`);
