@@ -28,6 +28,39 @@ const send = async (data) => {
   } catch {}
 };
 
+// ---------- MODO «TÍTULO»: probar TODAS las fuentes de un título en UNA sola sesión, en orden ----------
+// Es el navegador del explorador (ya no el de Cloudflare): mismo explorar.js que usa tu página. Abre el título,
+// toca cada fuente (clic real), sigue iframe / pestaña nueva / navegación, da clic en el centro del reproductor y
+// solo da por buena la fuente cuyo video AVANZA (PLAYBACK_CONFIRMED). Va contando cada paso a tu página.
+if (job.mode === "titulo") {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+  const AD = /(^|\.)(imasdk\.googleapis\.com|doubleclick\.net|googlesyndication\.com|googleadservices\.com|adnxs(-simple)?\.com|teads\.tv|outbrain(img)?\.com|taboola\.com|pubmatic\.com|adsrvr\.org|amazon-adsystem\.com|criteo\.(com|net)|rubiconproject\.com|scorecardresearch\.com|2mdn\.net)$/i;
+  const events = [];
+  let chain = Promise.resolve(), lastSend = 0, finished = false;
+  const flush = (status = "running") => { chain = chain.then(() => send({ status, job: { status, events } })); return chain; };
+  const emit = (e) => { events.push(e); if (e.type !== "stage" || Date.now() - lastSend > 1500) { lastSend = Date.now(); flush(); } if (cancel && !finished) { finished = true; flush("cancelled").then(() => process.exit(0)); } };
+  try {
+    const { probarTitulo } = await import("./explorar.js");
+    const code = job.code || (PAGE ? await (await fetch(PAGE + "/explorador-dom.js")).text() : "");
+    const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
+    const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
+    await ctx.route("**/*", (r) => { // sin publicidad ni imágenes: más rápido (igual que antes en Cloudflare)
+      const t = r.request().resourceType(); let h = ""; try { h = new URL(r.request().url()).hostname; } catch {}
+      return t === "image" || t === "font" || AD.test(h) ? r.abort().catch(() => {}) : r.continue().catch(() => {});
+    });
+    const page = await ctx.newPage();
+    emit({ type: "preflight", ok: true, browser: "github" });
+    const r = await probarTitulo(page, { url: job.url, sources: job.sources || [], code, totalMs: job.ms || 10000, emit });
+    emit({ type: "done", ...r, results: undefined });
+    finished = true; await flush("done");
+    await browser.close().catch(() => {});
+  } catch (e) {
+    emit({ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", sourceTested: false, selected_source: null, detail: String(e?.message || e).slice(0, 160) });
+    finished = true; await flush("done");
+  }
+  process.exit(0);
+}
+
 // ---------- MODO «TU FUENTE»: entra a TU sitio, usa su buscador interno con tu nombre y saca los videos ----------
 // (sin límite de minutos: es el Chrome de GitHub, no el navegador de Cloudflare)
 if (job.mode === "fuente") {
