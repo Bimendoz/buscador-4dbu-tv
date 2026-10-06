@@ -28,6 +28,14 @@ const send = async (data) => {
   } catch {}
 };
 
+// Google Chrome (el que trae GitHub) y no el Chromium de Playwright: Chromium no trae H.264/AAC, así que casi ningún
+// video de película «avanza» en él aunque el servidor lo entregue bien. Si Chrome no estuviera, se usa Chromium.
+let BROWSER_NAME = "chrome";
+const launchChrome = async (opts) => {
+  try { return await chromium.launch({ ...opts, channel: "chrome" }); }
+  catch { BROWSER_NAME = "chromium"; return chromium.launch(opts); }
+};
+
 // ---------- MODO «TÍTULO»: probar TODAS las fuentes de un título en UNA sola sesión, en orden ----------
 // Es el navegador del explorador (ya no el de Cloudflare): mismo explorar.js que usa tu página. Abre el título,
 // toca cada fuente (clic real), sigue iframe / pestaña nueva / navegación, da clic en el centro del reproductor y
@@ -42,14 +50,14 @@ if (job.mode === "titulo") {
   try {
     const { probarTitulo } = await import("./explorar.js");
     const code = job.code || (PAGE ? await (await fetch(PAGE + "/explorador-dom.js")).text() : "");
-    const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
+    const browser = await launchChrome({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
     const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
     await ctx.route("**/*", (r) => { // sin publicidad ni imágenes: más rápido (igual que antes en Cloudflare)
       const t = r.request().resourceType(); let h = ""; try { h = new URL(r.request().url()).hostname; } catch {}
       return t === "image" || t === "font" || AD.test(h) ? r.abort().catch(() => {}) : r.continue().catch(() => {});
     });
     const page = await ctx.newPage();
-    emit({ type: "preflight", ok: true, browser: "github" });
+    emit({ type: "preflight", ok: true, browser: "github-" + BROWSER_NAME });
     const r = await probarTitulo(page, { url: job.url, sources: job.sources || [], code, totalMs: job.ms || 10000, emit });
     emit({ type: "done", ...r, results: undefined });
     finished = true; await flush("done");
@@ -65,7 +73,7 @@ if (job.mode === "titulo") {
 // (sin límite de minutos: es el Chrome de GitHub, no el navegador de Cloudflare)
 if (job.mode === "fuente") {
   const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
-  const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
+  const browser = await launchChrome({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
   const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
   const out = { status: "running", step: "Chrome de GitHub listo: entrando a tu fuente…", found: [], pages: [], tried: 0 };
   const seen = new Set();
@@ -84,7 +92,7 @@ if (job.mode === "fuente") {
   const step = async (t) => { out.step = t; await send({ status: "running", job: out }); };
   const autoplay = async (pg) => { for (const f of pg.frames()) await f.evaluate(() => {
     for (const v of document.querySelectorAll("video")) { v.muted = true; v.play().catch(() => {}); }
-    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i]");
+    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i], [class*=captcha i] button, [class*=gate i] button");
     if (b && [...document.querySelectorAll("video")].every((v) => v.paused)) b.click();
   }).catch(() => {}); };
   const domVideos = async (pg, src) => { for (const f of pg.frames()) { const vs = await f.evaluate(() => [...document.querySelectorAll("video, video source, source")].map((v) => v.currentSrc || v.src).filter(Boolean)).catch(() => []); for (const v of vs) add(v, pg.url(), pg.url(), src); } };
@@ -106,7 +114,7 @@ if (job.mode === "fuente") {
   };
   // botones de servidor que solo cambian el reproductor al tocarlos
   const clickServers = async (pg, src) => {
-    const btns = pg.locator("li, button, a, span, div").filter({ hasText: /^\s*(servidor|server|opci[oó]n|option|reproductor|player|mirror|enlace)\b.{0,25}$/i });
+    const btns = pg.locator("li, button, a, span, div").filter({ hasText: /^\s*(filemoon|streamwish|swdyu|voe|dood|streamtape|mixdrop|vidhide|lulu|upstream|okru|ok\.ru|uqload|netu|hqq|waaw|vidguard|streamlare|byse|vidmoly|vidoza|powvideo|mega|servidor|server|opci[oó]n|option|reproductor|player|mirror|enlace)\b.{0,25}$/i });
     const n = await btns.count().catch(() => 0);
     for (let i = 0; i < n && !cancel; i++) { await btns.nth(i).click({ timeout: 3000 }).catch(() => {}); await pg.waitForTimeout(2500); await autoplay(pg); await domVideos(pg, src); }
   };
@@ -115,11 +123,13 @@ if (job.mode === "fuente") {
     if (cancel || opened.has(u)) return; opened.add(u);
     await step(label);
     const p2 = await ctx.newPage(); watch(p2, src);
+    let gateAt = 0; // el servidor pidió su desafío (portero): se le da tiempo a su página para resolverlo
+    p2.on("request", (r) => { if (!gateAt && /\/(api\/)?[\w\/-]*(captcha|challenge|attest|pow)\b/i.test(r.url())) { gateAt = Date.now(); step(label + " · el servidor pide un desafío: espero a que lo resuelva…"); } });
     const before = out.found.length, t0 = Date.now();
     let more = [];
     try {
       await p2.goto(u, { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
-      while (Date.now() - t0 < 16000 && !cancel) {
+      while (Date.now() - t0 < (gateAt ? Math.max(16000, gateAt - t0 + 60000) : 16000) && !cancel) {
         await p2.waitForTimeout(1500); await autoplay(p2); await domVideos(p2, src);
         if (out.found.length > before && Date.now() - t0 > 6000) break;
       }
