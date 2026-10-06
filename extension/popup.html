@@ -140,6 +140,20 @@
     #tvSend .tvst { font: 10.5px/1.4 var(--mono); color: var(--muted); }
     #tvSend .tvst.ok { color: var(--green); } #tvSend .tvst.err { color: var(--red); }
 
+    /* grabador de pasos */
+    #btnRec.on { color: var(--red); border-color: var(--red); animation: recblink 1.2s steps(2) infinite; }
+    @keyframes recblink { 50% { color: var(--dim); } }
+    #recBox { border-bottom: 1px solid var(--line); background: var(--panel); padding: 10px; display: flex; flex-direction: column; gap: 7px; border-left: 2px solid var(--red); }
+    #recBox[hidden] { display: none; }
+    #recBox .rh { display: flex; align-items: center; gap: 6px; font: 700 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--red); }
+    #recBox .rh .tm { margin-left: auto; color: var(--muted); letter-spacing: 0; text-transform: none; font-weight: 500; }
+    #recBox p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    #recBox p.warn { color: var(--amber); }
+    #recBox .row { display: flex; gap: 5px; }
+    #recBox input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line2); border-radius: 3px; background: var(--bg); color: var(--text); }
+    #recBox .rc { font: 10.5px/1.4 var(--mono); color: var(--muted); }
+    button.b.rec { background: var(--red); border-color: var(--red); color: #fff; }
+
     /* link único publicado */
     .pub { background: var(--panel); border: 1px solid var(--line); border-top: 2px solid var(--accent); border-radius: 4px; padding: 10px; margin-bottom: 10px; }
     .pub-t { display: flex; align-items: center; gap: 7px; font: 700 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
@@ -205,8 +219,10 @@
       <button id="tabSaved" data-icon="list">Guardados<span class="n" id="countSaved">0</span></button>
       <button id="tabSearch" title="Buscar un canal o extraerlo de una página" data-icon="search">Buscar</button>
     </div>
+    <button class="icon-btn" id="btnRec" title="Grabar pasos: haz a mano lo que harías y sale un informe paso a paso (Alt+Shift+R)" data-icon="dot"></button>
     <button class="icon-btn" id="btnSettings" title="Ajustes rápidos" data-icon="settings"></button>
   </header>
+  <section id="recBox" hidden></section>
 
   <section id="settings">
     <label><input type="checkbox" id="optLive">
@@ -256,5 +272,6 @@
   <script src="lib/icons.js"></script>
   <script src="lib/lang.js"></script>
   <script src="popup.js"></script>
+  <script src="popup-rec.js"></script>
 </body>
 </html>
