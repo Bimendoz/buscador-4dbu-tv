@@ -35,17 +35,19 @@ const AUTOPLAY = `(() => {
 // Monitor de red: documentos, iframes, fetch, xhr, media y manifiestos (con estado HTTP, frame y momento)
 export function networkMonitor(page, t0 = Date.now(), tag = "") {
   const log = [], media = new Map(), byReq = new Map();
+  let gateT = 0, mediaT = 0; // cuándo pidió el servidor su desafío (portero) · cuándo llegó el último video/lista nuevo
   const frameOf = (r) => { try { const f = r.frame(); return f ? f.url() : ""; } catch { return ""; } };
   const isMedia = (url, type, ct) => !NOISE.test(url) && (MEDIA_URL.test(url) || type === "media" || MEDIA_CT.test(ct || ""));
   const onReq = (r) => {
     try {
       const url = r.url(), type = r.resourceType();
       if (!/^https?:/i.test(url)) return;
+      if (!gateT && /^(xhr|fetch)$/.test(type) && GATE_URL.test(url)) gateT = Date.now();
       if (!/^(document|xhr|fetch|media|other|manifest)$/.test(type) && !MEDIA_URL.test(url)) return;
       const e = { t: Date.now() - t0, method: r.method(), type, url: url.slice(0, 500), frame: (tag ? tag + " " : "") + frameOf(r).slice(0, 300), status: 0, media: isMedia(url, type, "") };
       if (log.length < 250 || e.media) log.push(e);
       byReq.set(r, e);
-      if (e.media && !media.has(url)) media.set(url, { url, type: MANIFEST_URL.test(url) ? "manifest" : "media", status: 0, referer: (r.headers() || {}).referer || "", frame: frameOf(r), t: e.t });
+      if (e.media && !media.has(url)) mediaT = Date.now(), media.set(url, { url, type: MANIFEST_URL.test(url) ? "manifest" : "media", status: 0, referer: (r.headers() || {}).referer || "", frame: frameOf(r), t: e.t });
     } catch {}
   };
   const onRes = async (res) => {
@@ -53,6 +55,7 @@ export function networkMonitor(page, t0 = Date.now(), tag = "") {
       const r = res.request(), url = res.url(), ct = (res.headers() || {})["content-type"] || "";
       const e = byReq.get(r); if (e) { e.status = res.status(); e.ct = ct.split(";")[0]; }
       if (isMedia(url, r.resourceType(), ct)) {
+        if (!media.has(url)) mediaT = Date.now();
         const m = media.get(url) || { url, type: MANIFEST_URL.test(url) || /mpegurl|dash/i.test(ct) ? "manifest" : "media", referer: (r.headers() || {}).referer || "", frame: frameOf(r), t: Date.now() - t0 };
         m.status = res.status(); m.ct = ct.split(";")[0]; media.set(url, m);
         if (e) e.media = true;
@@ -72,6 +75,8 @@ export function networkMonitor(page, t0 = Date.now(), tag = "") {
   return {
     log, media,
     since: (t) => [...media.values()].filter((m) => m.t >= t),
+    gate: () => gateT,
+    mediaAt: () => mediaT,
     stop: () => { try { page.off("request", onReq); page.off("response", onRes); page.off("requestfailed", onFail); } catch {} },
   };
 }
@@ -108,6 +113,12 @@ async function options(page, url, code) {
 // ============================================================
 // LIMITS (los del programador): acción de la fuente, detección del reproductor, verificación y total por fuente
 export const LIMITS = { sourceAction: 8000, playerDetection: 4000, playbackVerification: 3000, totalSource: 10000 };
+// PORTERO: servidores como Filemoon/Byse ponen un botón «Reproducir vídeo» que pide un desafío (challenge → attest →
+// captcha → prueba de trabajo de ~10 s en un PC, más en GitHub → verify → playback) antes de entregar la lista .m3u8.
+// Mientras ese portero esté trabajando no se corta la fuente por tiempo: se espera hasta GATE_MS desde que apareció.
+export const GATE_MS = 60000;
+// (solo porteros automáticos que el propio sitio resuelve en el navegador; nunca se resuelven captchas de una persona)
+export const GATE_URL = /\/(api\/)?[\w\/-]*(captcha|challenge|attest|pow)\b/i;
 export const SOURCE_TEST = { timeoutMs: LIMITS.totalSource, loadTimeoutMs: 3500, playerTimeoutMs: LIMITS.playerDetection, playTimeoutMs: 2000, verifyMs: 1200, progressMin: 0.2, retryMs: 700 };
 // ¿error de infraestructura (navegador de la nube) y no de la fuente?
 export function isBrowserInfrastructureError(error) {
@@ -118,14 +129,24 @@ export function isBrowserInfrastructureError(error) {
     /target closed|session closed|browser has disconnected|connection closed|protocol error|websocket is not open/.test(text);
 }
 // tope general por fuente
-export async function runSourceWithTimeout(task, timeout) {
+export async function runSourceWithTimeout(task, timeout, budget = null) {
   let timer;
+  const end = Date.now() + timeout;
+  if (budget) budget.until = Math.max(budget.until || 0, end);
   try {
-    return await Promise.race([task(), new Promise((_, reject) => { timer = setTimeout(() => { const e = new Error("SOURCE_TIMEOUT"); e.code = "SOURCE_TIMEOUT"; reject(e); }, timeout); })]);
+    return await Promise.race([task(), new Promise((_, reject) => {
+      const tick = () => { // el plazo lo puede alargar la prueba (portero trabajando): se revisa cada 250 ms
+        const g = budget?.gate?.() || 0;
+        if (Date.now() >= (budget ? Math.max(budget.until, g ? g + GATE_MS + 10000 : 0) : end)) { const e = new Error("SOURCE_TIMEOUT"); e.code = "SOURCE_TIMEOUT"; reject(e); }
+        else timer = setTimeout(tick, 250);
+      };
+      timer = setTimeout(tick, 250);
+    })]);
   } finally { clearTimeout(timer); }
 }
 // selectores de botón Play (los tuyos) + cualquier botón que diga play/reproducir
 const PLAY_SELECTORS = ['button[aria-label*="Play" i]', 'button[title*="Play" i]', '[aria-label*="Play" i]', '[title*="Play" i]', ".play", ".play-button", ".vjs-play-control", ".vjs-big-play-button",
+  'button[aria-label*="reproducir" i]', '[aria-label*="reproducir" i]', 'button[title*="reproducir" i]', '[class*="captcha" i] button', '[class*="gate" i] button', 'button[class*="play" i]',
   ".jw-icon-playback", ".jw-display-icon-container", '.plyr__control[data-plyr="play"]', '[class*="play-button" i]', '[class*="play_button" i]', '[class*="playButton" i]'];
 
 // el <video> del reproductor en TODAS las frames (primero el visible; si no, el primero que haya)
@@ -152,7 +173,7 @@ export async function findPlayButton(page, prefer = null) {
         const visible = (e) => { const b = e.getBoundingClientRect(), st = getComputedStyle(e); return b.width > 8 && b.height > 8 && st.visibility !== "hidden" && st.display !== "none" && +st.opacity !== 0; };
         let el = null;
         for (const s of sels) { try { el = [...document.querySelectorAll(s)].find(visible); } catch {} if (el) break; }
-        if (!el) el = [...document.querySelectorAll("button, [role=button]")].find((e) => visible(e) && /^(play|reproducir|ver|▶|►)$/i.test((e.getAttribute("aria-label") || e.textContent || "").trim()));
+        if (!el) el = [...document.querySelectorAll("button, [role=button]")].find((e) => visible(e) && /^(play|reproducir|reproducir v[ií]deo|ver|ver v[ií]deo|ver ahora|watch|▶|►)$/i.test((e.getAttribute("aria-label") || e.textContent || "").trim()));
         if (!el) return false;
         document.querySelectorAll("[data-x4play]").forEach((x) => x.removeAttribute("data-x4play"));
         el.setAttribute("data-x4play", "1"); return true;
@@ -275,14 +296,39 @@ async function pageError(page) {
   try { const t = await page.evaluate(() => (document.body ? document.body.innerText : "").trim().slice(0, 800)); return t && t.length < 600 && ERR_TXT.test(t) ? t.slice(0, 120) : ""; } catch { return ""; }
 }
 // ------------------------------------------------------------
+// ESPERAR AL PORTERO: el servidor pidió su desafío (lo resuelve su propia página, sola, como en tu Chrome).
+// Se espera hasta GATE_MS a que aparezca el reproductor; si ya llegó la lista .m3u8 y el reproductor espera su
+// Play (JW Player), se le da. Mientras tanto se alarga el plazo de la fuente (budget) para que no se corte.
+// ------------------------------------------------------------
+export async function waitGate(page, net, tabs = [], { budget = null, step = () => {}, signal = null } = {}) {
+  const g0 = net.gate(); if (!g0) return null;
+  step("el servidor pide un desafío antes de dar el video (portero): espero a que su página lo resuelva");
+  const lim = g0 + GATE_MS;
+  while (Date.now() < lim && !signal?.aborted) {
+    if (budget) budget.until = Math.max(budget.until || 0, Date.now() + 9000);
+    if (net.mediaAt() >= g0) { // el servidor ya entregó el video (o su lista .m3u8): ahora sí hay reproductor que probar
+      for (const p of [page, ...tabs.map((t) => t.page || t)]) {
+        if (p.isClosed?.()) continue;
+        const v = await findVideo(p).catch(() => null);
+        if (v) { step("el portero dejó pasar: llegó el video y está el reproductor"); return { v, page: p }; }
+      }
+    }
+    await sleep(400);
+  }
+  if (!signal?.aborted) step("el portero no dejó pasar a tiempo");
+  return null;
+}
+
+// ------------------------------------------------------------
 // PROBAR LA URL DE UNA FUENTE (abrir el servidor directamente)
 // ------------------------------------------------------------
-export async function probarUrl(page, { url, ms = SOURCE_TEST.timeoutMs, signal = null, onStep = null }) {
+export async function probarUrl(page, { url, ms = SOURCE_TEST.timeoutMs, signal = null, onStep = null, budget = null }) {
   const t0 = Date.now();
   const res = { url, status: "failed", reason: null, stage: "opening", steps: [], media: [], elapsedMs: 0 };
   const step = (s) => { res.steps.push({ t: Date.now() - t0, s }); try { onStep?.(s); } catch {} };
   const stage = (s) => { if (res.stage !== s) { res.stage = s; step(s.toUpperCase()); } };
   const net = networkMonitor(page, t0);
+  if (budget) budget.gate = net.gate;
   const tabs = [];
   const onPopup = (p) => { tabs.push(p); step("se abrió una pestaña nueva"); };
   page.on("popup", onPopup);
@@ -310,9 +356,14 @@ export async function probarUrl(page, { url, ms = SOURCE_TEST.timeoutMs, signal 
       }
     }
     for (const p of tabs) { if (v) break; const tv = await findVideo(p).catch(() => null); if (tv) { v = tv; step("el reproductor está en la pestaña nueva"); } }
+    if (!v && !errText && net.gate()) { const g = await waitGate(page, net, tabs, { budget, step, signal }); if (g) { v = g.v; stage("player_found"); } }
     if (!v) { res.errText = errText || (await pageError(page)) || (await players(page)).errText || ""; res.reason = res.errText ? "SOURCE_ERROR" : "NO_PLAYER"; return res; }
     stage("player_found");
-    const pb = await attemptPlayback(v.frame.page ? v.frame.page() : page, v, stage, tabs, step, signal);
+    let pb = await attemptPlayback(v.frame.page ? v.frame.page() : page, v, stage, tabs, step, signal);
+    if (!pb.working && net.gate() && !signal?.aborted) {
+      const g = await waitGate(page, net, tabs, { budget, step, signal });
+      if (g) pb = await attemptPlayback(g.page, g.v, stage, tabs, step, signal);
+    }
     Object.assign(res, { progress: pb.progress, video: { w: pb.w, h: pb.h, src: pb.src } });
     if (pb.working) { res.status = "working"; res.reason = "PLAYBACK_CONFIRMED"; stage("working"); }
     else { res.reason = pb.reason; }
@@ -328,10 +379,11 @@ export async function probarUrl(page, { url, ms = SOURCE_TEST.timeoutMs, signal 
 // ------------------------------------------------------------
 // PROBAR UNA FUENTE QUE SE ACTIVA EN LA PÁGINA DEL TÍTULO (clic, evento JS, lista, pestaña nueva, iframe)
 // ------------------------------------------------------------
-export async function probarFuente(page, { url, i = 0, nm = "", ms = LIMITS.sourceAction, code, listOnly = false, settle = 1200, signal = null, onStep = null }) {
+export async function probarFuente(page, { url, i = 0, nm = "", ms = LIMITS.sourceAction, code, listOnly = false, settle = 1200, signal = null, onStep = null, budget = null }) {
   const t0 = Date.now();
   const net = networkMonitor(page, t0);
   const res = { url, ops: [], i, name: nm, stage: "opening", status: "failed", reason: null, media: [], frames: [], popups: [], steps: [] };
+  if (budget) budget.gate = net.gate;
   const step = (s) => { res.steps.push({ t: Date.now() - t0, s }); try { onStep?.(s); } catch {} };
   const stage = (s) => { if (res.stage !== s) { res.stage = s; step(s.toUpperCase()); } };
   const tabs = [];
@@ -407,6 +459,10 @@ export async function probarFuente(page, { url, i = 0, nm = "", ms = LIMITS.sour
       if (Date.now() - t0 > settle + Math.min(ms, 6000) && !tabs.length && !net.since(0).length && !st.frames.some((f) => !before.frames.includes(f))) break; // la acción no abrió nada
       await sleep(200);
     }
+    if (!v && !res.errText && net.gate()) { // el servidor puso su portero (botón «Reproducir vídeo» + desafío): se espera
+      const g = await waitGate(page, net, tabs, { budget, step, signal });
+      if (g) { v = g.v; target = g.page; }
+    }
     const after = await players(page);
     res.frames = after.frames.filter((f) => !before.frames.includes(f));
     res.tab = tabs.find((x) => x.keep)?.page?.url?.() || "";
@@ -416,7 +472,11 @@ export async function probarFuente(page, { url, i = 0, nm = "", ms = LIMITS.sour
       return res;
     }
     stage("player_found");
-    const pb = await attemptPlayback(target, v, stage, tabs, step, signal);
+    let pb = await attemptPlayback(target, v, stage, tabs, step, signal);
+    if (!pb.working && net.gate() && !signal?.aborted) { // se tocó el portero: cuando entregue el video, otra vez Play
+      const g = await waitGate(page, net, tabs, { budget, step, signal });
+      if (g) pb = await attemptPlayback(g.page, g.v, stage, tabs, step, signal);
+    }
     Object.assign(res, { progress: pb.progress, video: { w: pb.w, h: pb.h, src: pb.src } });
     if (pb.working) { res.status = "working"; res.reason = "PLAYBACK_CONFIRMED"; stage("working"); }
     else res.reason = pb.reason;
@@ -447,20 +507,20 @@ export async function probarTitulo(page, { url, sources = [], code, totalMs = LI
     const n = src.n, t0 = Date.now();
     const out = { index: n, name: src.name, status: "testing", reason: null, detail: "", sourceTested: false, stages: [] };
     emit({ type: "source", n, status: "testing", stage: "opening" });
-    const signal = { aborted: false };
+    const signal = { aborted: false }, budget = { until: 0 };
     const onStep = (st) => emit({ type: "stage", n, stage: st });    let res;
     try {
       out.sourceTested = true;
       const task = async () => {
         let r = null;
         // la acción REAL de la fuente en la página del título (clic, evento, lista, pestaña nueva, iframe)
-        if (src.op != null) r = await probarFuente(page, { url, i: src.op, nm: src.name, code, signal, ms: LIMITS.sourceAction, onStep });
+        if (src.op != null) r = await probarFuente(page, { url, i: src.op, nm: src.name, code, signal, ms: LIMITS.sourceAction, onStep, budget });
         // sin acción que tocar en la página: su enlace directo (nunca uno inventado)
-        if (src.href && !signal.aborted && (!r || (r.status !== "working" && /^(NO_ACTION)$/.test(r.reason || "")))) r = await probarUrl(page, { url: src.href, signal, ms: totalMs, onStep });
+        if (src.href && !signal.aborted && (!r || (r.status !== "working" && /^(NO_ACTION)$/.test(r.reason || "")))) r = await probarUrl(page, { url: src.href, signal, ms: totalMs, onStep, budget });
         return r;
       };
       const p = task();
-      res = await runSourceWithTimeout(() => p, totalMs).catch(async (e) => {
+      res = await runSourceWithTimeout(() => p, totalMs, budget).catch(async (e) => {
         if (e?.code === "SOURCE_TIMEOUT") { signal.aborted = true; await Promise.race([p.catch(() => null), new Promise((r) => setTimeout(r, 4000))]); return { status: "failed", reason: "SOURCE_TIMEOUT", steps: [] }; }
         throw e;
       });
