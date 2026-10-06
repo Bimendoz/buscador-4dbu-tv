@@ -95,3 +95,15 @@ Los links con 🔒 SOLO ESTA RED siguen dependiendo de la red donde se probaron.
   donde se capturó. En el celular con datos móviles u otro wifi no va a reproducir.
 - Los flujos con DRM (RCN por web, Netflix…) no se pueden reproducir fuera de su sitio.
 - Quien tenga el link de la lista puede verla.
+
+## Grabar pasos (v5.6.0) — para enseñarle al Detector cómo lo haces tú
+1. Abre la página del título en Chrome. En el popup toca el botón **●** (arriba, junto a Ajustes) → **Grabar esta pestaña**
+   (o el atajo **Alt+Shift+R**). El ícono de la extensión muestra **REC** en las pestañas que se graban.
+2. Haz a mano lo que harías para ver el video: tocar el servidor, cerrar la publicidad, darle play, cambiar de servidor…
+   Con **Anotar** puedes dejar notas («este sí abrió», «aquí salió publicidad»).
+3. **Detener y ver informe** (o Alt+Shift+R otra vez): se abre el informe paso a paso con tu dominio tapado
+   («misitio.com»). **Copiar informe** y pegarlo en el chat.
+- Se graba solo esa pestaña y las que se abran desde ella. Nada sale de tu computador; se guardan los últimos 8 informes.
+- Si la página ya estaba abierta antes de instalar o actualizar la extensión, recárgala (F5) para que se graben los clics.
+- Revisa el informe antes de pegarlo: el dominio se tapa en direcciones y títulos, pero un link codificado raro podría
+  dejarlo a la vista. Puedes tapar más dominios tuyos en «Otros dominios a tapar».
