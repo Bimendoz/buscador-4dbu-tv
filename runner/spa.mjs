@@ -286,6 +286,12 @@ async function discoverCards(ctx, page, home, tap, emit) {
   if (!first) { emit({ type: "spa-stage", stage: `CARDS_SAMPLE ${cards.slice(0, 4).map((c) => `${c.w}x${c.h}${c.hero ? " hero" : ""} «${c.name.slice(0, 30)}»`).join(" | ")}`, ms: Date.now() - t0 }); return []; }
   found.push(first);
   const L = learn(tap.bodies, first.url, first.name);
+  if (!L) {
+    let tail = ""; try { tail = new URL(first.url).pathname.split("/").filter(Boolean).pop() || ""; } catch {}
+    let ctxs = "";
+    for (const b of tap.bodies) { const t = JSON.stringify(b); const i = tail ? t.indexOf(tail) : -1; if (i >= 0) { ctxs = t.slice(Math.max(0, i - 70), i + tail.length + 20).replace(/https?:\/\/[^"\\]+/g, "(url)"); break; } }
+    emit({ type: "spa-stage", stage: `TEMPLATE_MISS datos=${tap.bodies.length} ${ctxs ? "visto: " + ctxs : "el título no aparece en los datos"}`, ms: Date.now() - t0 });
+  }
   if (L) {
     const byName = new Map(cards.map((c) => [normS(c.name), c.img]));
     const all = applyLearn(tap.bodies, L).map((x) => ({ ...x, img: x.img || byName.get(normS(x.name)) || "" }));
@@ -411,7 +417,18 @@ async function directTest(page, ctx, job, code, emit) {
     // el reproductor tiene el tiempo de la acción (sourceAction) para aparecer
     const until = Math.min(t0 + LIMITS.sourceAction, deadline - 1500);
     while (!v && Date.now() < until) { await sleep(200); v = await newVideo(page); }
-    if (!v) return done({ status: "failed", reason: "NO_PLAYER", detail: "no apareció el reproductor", action });
+    if (!v) {
+      const dg = await page.evaluate(() => {
+        const all = window.__x4deep ? window.__x4deep() : [...document.querySelectorAll("*")];
+        const vids = all.filter((e) => e.tagName === "VIDEO").map((v) => `${Math.round(v.getBoundingClientRect().width)}x${Math.round(v.getBoundingClientRect().height)}${v.dataset.x4old ? " (ya estaba)" : ""}`);
+        const dlg = all.filter((e) => /dialog|modal|overlay-pane|toast|snack|alert|error|login|sign-in|paywall/i.test((typeof e.className === "string" ? e.className : "") + " " + (e.getAttribute && e.getAttribute("role") || "")) && e.getBoundingClientRect().width > 50).slice(0, 2).map((e) => (e.innerText || "").replace(/\s+/g, " ").trim().slice(0, 120)).filter(Boolean);
+        return { path: location.pathname, vids, ifr: document.querySelectorAll("iframe").length, dlg };
+      }).catch(() => ({}));
+      const path0 = (() => { try { return new URL(job.url).pathname; } catch { return ""; } })();
+      const bl = [...(job.__blocked || [])].slice(0, 6).join(", ");
+      return done({ status: "failed", reason: "NO_PLAYER", action,
+        detail: `no apareció el reproductor · acción: ${action}${dg.path && dg.path !== path0 ? " · pasó a " + dg.path : " · siguió en la misma página"} · videos: ${dg.vids?.length ? dg.vids.join(", ") : "ninguno"} · iframes: ${dg.ifr ?? "?"}${dg.dlg?.length ? " · aviso en pantalla: «" + dg.dlg.join(" / ") + "»" : ""}${bl ? " · bloqueados: " + bl : ""}` });
+    }
     stage("PLAYER_FOUND");
     // ¿ya avanza? si no, Play como lo haría una persona (dentro del tiempo que queda)
     stage("VERIFYING");
@@ -457,8 +474,11 @@ async function task(browser, job, code, emit, keep) {
   const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
   let kept = false;
   try {
+    const blocked = new Set(); job.__blocked = blocked;
     await ctx.route("**/*", (r) => { let h = ""; try { h = new URL(r.request().url()).hostname; } catch {} const t = r.request().resourceType();
-      return AD.test(h) || t === "font" || (que === "directo" && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
+      const ad = AD.test(h) && !(que === "directo" && /(^|\.)imasdk\.googleapis\.com$/i.test(h));
+      if (ad) blocked.add(h);
+      return ad || t === "font" || (que === "directo" && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
     if (que === "directo") await ctx.addInitScript(DRM_HOOK);
     const page = await ctx.newPage();
     emit({ type: "preflight", ok: true });
