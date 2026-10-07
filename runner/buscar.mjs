@@ -61,7 +61,8 @@ async function relayFor(r, ctx, page, UA, emit) {
 // ---------- MODO «SPA» (adaptador nuevo y aparte, spa.mjs): mira una página armada con JavaScript ----------
 // Solo responde la arquitectura (MULTI_SOURCE / DIRECT_PLAYER / PLAYER_PENDING) o la página ya armada. No toca los demás modos.
 if (job.mode === "spa") {
-  try { const { run } = await import("./spa.mjs"); await run(job, { send, launchChrome, isCancel: () => cancel, maxMs: MAX_MIN * 60e3 }); }
+  try { const { run } = await import("./spa.mjs"); await run(job, { send, launchChrome, isCancel: () => cancel, maxMs: MAX_MIN * 60e3,
+    take: job.warm && PAGE ? async () => { try { return await (await fetch(`${PAGE}/gh/tomar?${new URLSearchParams({ id: ID, t: T })}`)).json(); } catch { return {}; } } : null }); }
   catch (e) { await send({ status: "done", job: { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] } }); }
   process.exit(0);
 }
