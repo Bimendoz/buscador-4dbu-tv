@@ -178,7 +178,7 @@ function learn(jsons, url, name) {
   const visit = (o) => {
     if (hit || !o || typeof o !== "object") return;
     if (Array.isArray(o)) { for (const x of o) visit(x); return; }
-    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && (v === tail || v.endsWith("/" + tail))) { hit = { k, obj: o, path: v !== tail }; return; }
+    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && (v === tail || v.endsWith("/" + tail) || v.endsWith(":" + tail))) { hit = { k, obj: o, path: v.endsWith("/" + tail), urn: v.endsWith(":" + tail) }; return; }
     for (const v of Object.values(o)) visit(v);
   };
   for (const j of jsons) visit(j);
@@ -186,9 +186,15 @@ function learn(jsons, url, name) {
   const o = hit.obj, keys = Object.keys(o).filter((k) => typeof o[k] === "string");
   const nameKey = (name && keys.find((k) => normS(o[k]) === normS(name))) || ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof o[k] === "string");
   if (!nameKey) return null;
-  const imgKey = keys.find((k) => /^https?:\/\/\S+\.(jpe?g|png|webp|avif)(\?|$)/i.test(o[k]));
+  const IMG = /^https?:\/\/\S+\.(jpe?g|png|webp|avif)(\?|$)/i;
+  let imgKey = keys.find((k) => IMG.test(o[k]));
+  if (!imgKey) for (const [k, v] of Object.entries(o)) if (v && typeof v === "object" && !Array.isArray(v)) { const k2 = Object.keys(v).find((x) => typeof v[x] === "string" && IMG.test(v[x])); if (k2) { imgKey = k + "." + k2; break; } }
   const typeKey = ["type", "contentType", "content_type", "kind", "mediaType", "assetType", "category"].find((k) => typeof o[k] === "string");
-  return { k: hit.k, path: hit.path, nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
+  // urn: el enlace es /<tipo>/<slug> con los dos últimos pedazos del identificador (/movie/x, /tvseries/y…)
+  let urn2 = false;
+  if (hit.urn) { const sg = o[hit.k].split(":"); try { urn2 = new URL(url).pathname.replace(/\/+$/, "") === "/" + sg.slice(-2).join("/"); } catch {} }
+  if (hit.urn && !urn2) return null;
+  return { k: hit.k, path: hit.path, urn2, urnType: urn2 ? o[hit.k].split(":").slice(-2)[0] : "", nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
 }
 // el mismo enlace del título aprendido, con el «slug» de otro título en su lugar (nada inventado: es el campo del sitio)
 function swapTail(url, tail, v) {
@@ -204,10 +210,14 @@ function applyLearn(jsons, L) {
     if (!o || typeof o !== "object" || out.length >= 400) return;
     if (Array.isArray(o)) { o.forEach(visit); return; }
     const v = o[L.k], nm = o[L.nameKey];
-    if (typeof v === "string" && v && typeof nm === "string" && nm.trim() && (!L.typeKey || o[L.typeKey] === L.typeVal)) {
+    const ownPath = L.path || L.urn2; // cada uno trae su propio camino: sirve para películas y series a la vez
+    if (typeof v === "string" && v && typeof nm === "string" && nm.trim() && (ownPath || !L.typeKey || o[L.typeKey] === L.typeVal)) {
       let u = "";
-      try { u = L.path ? new URL(v, L.url).href : /^[\w.~%-]+$/.test(v) ? swapTail(L.url, L.tail, v) : ""; } catch {}
-      if (u && !seen.has(u)) { seen.add(u); out.push({ url: u, name: nm.trim().slice(0, 120), img: L.imgKey && typeof o[L.imgKey] === "string" ? o[L.imgKey] : "", via: "datos del sitio" }); }
+      try {
+        if (L.urn2) { const sg = v.split(":"); if (sg.length >= 3 && (sg[sg.length - 2] === L.urnType || /^(movies?|tvseries|series|shows?|channels?|live|specials?|documentar(y|ies))$/i.test(sg[sg.length - 2]))) u = new URL("/" + sg.slice(-2).join("/"), L.url).href; }
+        else u = L.path ? new URL(v, L.url).href : /^[\w.~%-]+$/.test(v) ? swapTail(L.url, L.tail, v) : "";
+      } catch {}
+      if (u && !seen.has(u)) { seen.add(u); const im = L.imgKey ? L.imgKey.split(".").reduce((a, k) => (a && typeof a === "object" ? a[k] : undefined), o) : ""; out.push({ url: u, name: nm.trim().slice(0, 120), img: typeof im === "string" ? im : "", via: "datos del sitio" }); }
     }
     Object.values(o).forEach(visit);
   };
@@ -227,6 +237,8 @@ async function clickCard(page, home, c) {
     const d = (n) => n ? n.tagName.toLowerCase() + (typeof n.className === "string" && n.className.trim() ? "." + n.className.trim().split(/\s+/)[0] : "") : "-";
     return { x, y, w: Math.round(r.width), h: Math.round(r.height), top: d(t) + " < " + d(t?.parentElement || t?.getRootNode?.()?.host) };
   }, cur.i);
+  await page.evaluate(() => document.querySelectorAll(".cdk-overlay-backdrop, .modal-backdrop, [class*='overlay-backdrop']").forEach((b) => b.click())).catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
   let pt = await geo();
   const before = page.url();
   const navd = async (ms) => { for (let k = 0; k < ms / 200; k++) { await sleep(200); if (page.url() !== before) return page.url(); } return ""; };
@@ -242,7 +254,11 @@ async function clickCard(page, home, c) {
   const p = await Promise.race([pop, sleep(50).then(() => null)]); if (p) { if (!url) url = p.url(); p.close().catch(() => {}); }
   if (!url || url === home) { clickCard.fails = (clickCard.fails || []).concat(`${pt.w}x${pt.h} encima: ${pt.top}`).slice(-6); await page.keyboard.press("Escape").catch(() => {}); return null; }
   let name = c.name;
-  if (!name) { await sleep(800); name = await page.evaluate(() => (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title || "").trim().slice(0, 120)).catch(() => ""); }
+  for (let k = 0; k < 6; k++) { // el nombre de verdad está en la página del título (la tarjeta a veces solo dice «Nueva temporada»)
+    await sleep(250);
+    const h = await page.evaluate(() => (window.__x4deep ? null : null, (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || "").trim().slice(0, 120))).catch(() => "");
+    if (h) { name = h; break; }
+  }
   await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
   await settle(page, () => {}, 4000, true);
   return { url, name: name || url.split("/").filter(Boolean).pop().replace(/-/g, " "), img: c.img };
@@ -277,9 +293,10 @@ async function discoverCards(ctx, page, home, tap, emit) {
       LEARNED.set(host, L);
       emit({ type: "spa-stage", stage: `TEMPLATE ${all.length}`, ms: Date.now() - t0 });
       // las tarjetas que esos datos no cubren (otro tipo de contenido) se tocan
-      const have = new Set(all.map((x) => normS(x.name)));
-      const rest = cards.filter((c) => c.name && !have.has(normS(c.name))).slice(0, 8);
-      for (const c of rest) { const r = await clickCard(page, home, c).catch(() => null); if (r) all.push(r); }
+      // solo si esos datos dejaron por fuera bastantes tarjetas (otro tipo de contenido) se tocan unas pocas
+      const imgs = new Set(all.map((x) => x.img).filter(Boolean)), names = new Set(all.map((x) => normS(x.name)));
+      const rest = cards.filter((c) => !imgs.has(c.img) && !(c.name && names.has(normS(c.name))));
+      if (all.length < cards.length * 0.8) for (const c of rest.slice(0, 4)) { const r = await clickCard(page, home, c).catch(() => null); if (r && !all.some((x) => x.url === r.url)) all.push(r); }
       return all;
     }
   }
@@ -308,7 +325,7 @@ const cardsHtml = (list) => !list.length ? "" : `<section class="x4-cards"><h2>T
 function ctaMark() {
   const all = window.__x4deep();
   const vis = (e) => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return r.width > 20 && r.height > 14 && s.visibility !== "hidden" && s.display !== "none"; };
-  const TXT = /^(ver ahora|ver pel[ií]cula|ver gratis|ver en vivo|ver episodio( \d+)?|ver serie|continuar( viendo)?|reproducir|play|watch( now)?|mirar|ver)$/i;
+  const TXT = /^(ver ahora|ver( la)? pel[ií]cula|ver gratis|ver en vivo|ver (el )?(primer )?episodio.*|ver (t|temporada)\s*\d.*|ver serie|continuar( viendo)?.*|reproducir.*|empezar|comenzar|play|watch( now)?|mirar|ver)$/i;
   const inPlayer = (e) => { for (let x = e; x; x = x.parentElement) if (/player-(controls?|layout|main)|vjs-|jw-|plyr/i.test(typeof x.className === "string" ? x.className : "")) return true; return false; };
   let best = null, sc = -1;
   for (const e of all) {
@@ -317,7 +334,7 @@ function ctaMark() {
     const t = (e.getAttribute("aria-label") || e.textContent || "").replace(/\s+/g, " ").trim();
     let s = TXT.test(t) ? 3 : 0;
     if (/cta|primary|watch|play/i.test(typeof e.className === "string" ? e.className : "")) s += 1;
-    if (e.querySelector && e.querySelector('[class*="icon-play" i],[name*="play" i]')) s += 1;
+    if (e.querySelector && e.querySelector('[class*="icon-play" i],[name*="play" i]')) s += 2;
     if (s >= 3 && s > sc) { best = e; sc = s; }
   }
   document.querySelectorAll("[data-x4cta]").forEach((x) => x.removeAttribute("data-x4cta"));
@@ -343,6 +360,15 @@ async function newVideo(page) {
   return best;
 }
 
+// DRM (Widevine/PlayReady/FairPlay): si el video pide licencia, se informa como contenido protegido y no se sigue
+export const DRM_HOOK = `(() => { try {
+  const n = navigator, r = n.requestMediaKeySystemAccess && n.requestMediaKeySystemAccess.bind(n);
+  window.__x4drm = { ks: "", req: false };
+  if (r) n.requestMediaKeySystemAccess = function (ks, cfg) { window.__x4drm.ks = ks; return r(ks, cfg); };
+  const g = window.MediaKeySession && MediaKeySession.prototype.generateRequest;
+  if (g) MediaKeySession.prototype.generateRequest = function () { window.__x4drm.req = true; return g.apply(this, arguments); };
+} catch {} })()`;
+const drmOf = async (page) => { for (const f of page.frames()) { const d = await f.evaluate(() => window.__x4drm || null).catch(() => null); if (d?.req) return d; } return null; };
 async function directTest(page, ctx, job, code, emit) {
   const n = 1, name = "Direct Player";
   const out = { index: n, name, status: "testing", reason: null, detail: "", sourceTested: false, stages: [], type: "direct" };
@@ -359,7 +385,12 @@ async function directTest(page, ctx, job, code, emit) {
   const net = networkMonitor(page, t0);
   const tabs = [];
   const onPop = (p) => tabs.push(p); page.on("popup", onPop);
-  const done = (o) => { net.stop(); try { page.off("popup", onPop); } catch {} return { ...out, ...o, sourceTested: true, ms: Date.now() - t0, stages: steps, media: net.since(0), net: net.log.slice(-60) }; };
+  const done0 = (o) => { net.stop(); try { page.off("popup", onPop); } catch {} return { ...out, ...o, sourceTested: true, ms: Date.now() - t0, stages: steps, media: net.since(0), net: net.log.slice(-60) }; };
+  const done = async (o) => {
+    const drm = await drmOf(page);
+    if (drm) { stage("DRM"); return done0({ ...o, status: "failed", reason: "SOURCE_ERROR", drm: drm.ks || "DRM", detail: `contenido protegido con DRM (${drm.ks || "licencia"}): solo se reproduce dentro del sitio, no se puede pasar a tu reproductor` }); }
+    return done0(o);
+  };
   try {
     stage("OPENING");
     for (const f of page.frames()) await f.evaluate(markOld).catch(() => {});
@@ -428,6 +459,7 @@ async function task(browser, job, code, emit, keep) {
   try {
     await ctx.route("**/*", (r) => { let h = ""; try { h = new URL(r.request().url()).hostname; } catch {} const t = r.request().resourceType();
       return AD.test(h) || t === "font" || (que === "directo" && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
+    if (que === "directo") await ctx.addInitScript(DRM_HOOK);
     const page = await ctx.newPage();
     emit({ type: "preflight", ok: true });
     if (que === "directo") {
@@ -444,6 +476,8 @@ async function task(browser, job, code, emit, keep) {
     const rd = await render(page, job.url, { scroll: pagina, emit });
     if (!rd.ok) emit({ type: "spa", ok: false, reason: "SOURCE_ERROR", detail: "la página no abrió", stages: rd.stages });
     else {
+      const inl = await page.evaluate(() => [...document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#ng-state, script#serverApp-state')].map((x) => x.textContent).filter((t) => t && t.length < 3e6)).catch(() => []);
+      for (const t of inl) { try { tap.bodies.push(JSON.parse(t)); } catch {} }
       const a = await detectSiteArchitecture(page, { url: job.url, code });
       const out = { type: "spa", ok: true, url: page.url(), title: await page.title().catch(() => ""), arch: a.arch, ops: a.ops, player: a.player, wall: a.wall, stages: rd.stages };
       if (pagina) {
@@ -503,16 +537,16 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
     await runOne("0", job);
     if (take) {
       const done = new Set(), doneKey = new Map();
-      let last = Date.now(), beat = 0, running = 0;
+      let last = Date.now(), beat = 0, running = 0, runningPre = 0;
       while (!isCancel() && Date.now() - START < maxMs) {
         const idle = !running && Date.now() - last > WARM_MIN * 60e3 && (!relay || relay.rl.idle() > 30 * 60e3);
         if (idle) break;
         const d = await take().catch(() => ({}));
         if (d?.cancel) break;
-        const t = running < 2 ? (d?.tasks || []).find((x) => !done.has(x.tid)) : null;
+        const t = (d?.tasks || []).find((x) => !done.has(x.tid) && (x.pre ? running < 3 && runningPre < 1 : running < 3));
         if (t) {
           done.add(t.tid);
-          running++;
+          running++; if (t.pre) runningPre++;
           (async () => { try {
           const key = (t.que || "") + " " + t.url;
           if (t.que === "pagina" && doneKey.has(key) && Date.now() - doneKey.get(key).at < 10 * 60e3) { // ya se hizo: se repite el resultado
@@ -523,7 +557,7 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
             if (t.que === "pagina") doneKey.set(key, { at: Date.now(), events: results[t.tid]?.events || [] });
           }
           last = Date.now();
-          } finally { running--; last = Date.now(); } })();
+          } finally { running--; if (t.pre) runningPre--; last = Date.now(); } })();
         } else if (Date.now() - beat > 10000) { beat = Date.now(); await flush("waiting"); }
         await sleep(t ? 50 : 1200);
       }
