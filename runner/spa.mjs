@@ -72,7 +72,7 @@ async function render(page, url, { scroll = false, emit = () => {} } = {}) {
   try { await page.goto(url, { waitUntil: "domcontentloaded", timeout: RENDER.load }); }
   catch { if (!page.url() || page.url() === "about:blank") { st("OPEN_FAILED"); return { ok: false, stages }; } }
   st("DOMCONTENTLOADED");
-  await settle(page, st);
+  await settle(page, st, RENDER.settle, scroll);
   if (scroll) {
     for (let i = 0; i < RENDER.scrolls; i++) { await page.evaluate(() => window.scrollBy(0, window.innerHeight)).catch(() => {}); await sleep(RENDER.scrollWait); }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
@@ -82,14 +82,16 @@ async function render(page, url, { scroll = false, emit = () => {} } = {}) {
   return { ok: true, stages };
 }
 // tiempo de render: hasta que aparezca el reproductor o la página deje de crecer
-async function settle(page, st = () => {}, ms = RENDER.settle) {
-  let last = -1, still = 0, grew = false;
+// list = página de lista (portada, categoría): un video de fondo NO significa que ya terminó de armarse; se espera
+// a que la página deje de crecer (sus carruseles con carátulas)
+async function settle(page, st = () => {}, ms = RENDER.settle, list = false) {
+  let last = -1, still = 0, grew = false, saw = false;
   const base = (await scan(page)).nodes;
   const end = Date.now() + ms;
   while (Date.now() < end) {
     await sleep(RENDER.poll);
     const s = await scan(page);
-    if (s.vids || s.ifr.length) { st("PLAYER_VISIBLE"); break; }
+    if ((s.vids || s.ifr.length) && !saw) { saw = true; st("PLAYER_VISIBLE"); if (!list) break; }
     if (s.nodes > base) grew = true;
     if (s.nodes === last) still++; else still = 0;
     last = s.nodes;
@@ -211,7 +213,7 @@ function applyLearn(jsons, L) {
 }
 // tocar una tarjeta y ver a qué título lleva (vuelve atrás después)
 async function clickCard(page, home, c) {
-  if (page.url() !== home) { await page.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); await settle(page, () => {}, 5000); }
+  if (page.url() !== home) { await page.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); await settle(page, () => {}, 5000, true); }
   await page.evaluate(DEEP).catch(() => {});
   const list = await page.evaluate(cardsCollect).catch(() => []);
   const cur = list.find((x) => x.img === c.img); if (!cur) return null;
@@ -227,7 +229,7 @@ async function clickCard(page, home, c) {
   let name = c.name;
   if (!name) { await sleep(800); name = await page.evaluate(() => (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title || "").trim().slice(0, 120)).catch(() => ""); }
   await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
-  await settle(page, () => {}, 4000);
+  await settle(page, () => {}, 4000, true);
   return { url, name: name || url.split("/").filter(Boolean).pop().replace(/-/g, " "), img: c.img };
 }
 // RÁPIDO: se toca UNA tarjeta; con su enlace se leen los demás de los datos del sitio. Si no se puede,
@@ -268,7 +270,7 @@ async function discoverCards(ctx, page, home, tap, emit) {
   const todo = cards.filter((c) => c.img !== first.img);
   const pages = [page];
   for (let k = 1; k < 4 && k <= todo.length / 3; k++) { const p = await ctx.newPage(); p.on("popup", (x) => x.close().catch(() => {})); await p.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); pages.push(p); }
-  await Promise.all(pages.slice(1).map((p) => settle(p, () => {}, 6000)));
+  await Promise.all(pages.slice(1).map((p) => settle(p, () => {}, 6000, true)));
   let next = 0;
   await Promise.all(pages.map(async (p) => {
     while (next < todo.length && Date.now() - t0 < RENDER.cardsMs) {
@@ -430,7 +432,20 @@ async function task(browser, job, code, emit, keep) {
       if (pagina) {
         await page.evaluate(DEEP).catch(() => {});
         let html = await page.evaluate(slimDoc).catch(() => "");
-        const linked = (html.match(/<a\b[^>]*href="[^"]*"[^>]*>(?:(?!<\/a>)[\s\S])*?<img/gi) || []).length;
+        // ¿cuántas carátulas traen su propio enlace a un título del sitio? (los logos y redes sociales no cuentan)
+        const linked = await page.evaluate(() => {
+          const all = window.__x4deep ? window.__x4deep() : [...document.querySelectorAll("*")];
+          return all.filter((a) => {
+            if (a.tagName !== "A") return false;
+            let u; try { u = new URL(a.getAttribute("href") || "", location.href); } catch { return false; }
+            if (u.hostname !== location.hostname || u.pathname.length < 3) return false;
+            const im = a.querySelector("img"); if (!im) return false;
+            const r = im.getBoundingClientRect();
+            return (r.width || im.width) >= 80 && (r.height || im.height) >= 60 && !/logo|icon|social/i.test((im.src || "") + " " + (im.alt || "") + " " + (im.className || ""));
+          }).length;
+        }).catch(() => 0);
+        out.linked = linked;
+        emit({ type: "spa-stage", stage: `LINKED_CARDS ${linked}`, ms: 0 });
         if (linked < 6) { const cards = await discoverCards(ctx, page, page.url(), tap, emit); out.cards = cards.length; html = html.replace(/<\/body><\/html>$|<\/html>$/, cardsHtml(cards) + "$&"); }
         // página con señal en vivo (Guía de TV): su propio reproductor ya está transmitiendo
         out.live = await page.evaluate(() => [...document.querySelectorAll("video")].some((v) => !isFinite(v.duration) && v.readyState >= 2)).catch(() => false);
