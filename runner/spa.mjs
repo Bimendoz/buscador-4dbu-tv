@@ -73,6 +73,7 @@ async function render(page, url, { scroll = false, emit = () => {} } = {}) {
   catch { if (!page.url() || page.url() === "about:blank") { st("OPEN_FAILED"); return { ok: false, stages }; } }
   st("DOMCONTENTLOADED");
   await settle(page, st, RENDER.settle, scroll);
+  if (await acceptConsent(page)) st("COOKIES_OK");
   if (scroll) {
     for (let i = 0; i < RENDER.scrolls; i++) { await page.evaluate(() => window.scrollBy(0, window.innerHeight)).catch(() => {}); await sleep(RENDER.scrollWait); }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
@@ -80,6 +81,19 @@ async function render(page, url, { scroll = false, emit = () => {} } = {}) {
     st("SCROLLED");
   }
   return { ok: true, stages };
+}
+// el aviso de cookies/privacidad tapa la página (una capa encima de todo): se acepta como lo haría una persona
+async function acceptConsent(page) {
+  for (const f of page.frames()) {
+    const ok = await f.evaluate(() => {
+      const all = window.__x4deep ? window.__x4deep() : [...document.querySelectorAll("*")];
+      const OK = /^(aceptar( todo| todas| y continuar| cookies)?|acepto|accept( all| cookies)?|allow all|permitir( todo| todas)?|entendido|de acuerdo|estoy de acuerdo|ok|got it|agree|i agree|continuar)$/i;
+      const b = all.find((e) => (e.tagName === "BUTTON" || e.getAttribute?.("role") === "button" || e.tagName === "A") && OK.test((e.innerText || e.textContent || "").replace(/\s+/g, " ").trim()) && e.getBoundingClientRect().width > 20);
+      if (!b) return false; b.click(); return true;
+    }).catch(() => false);
+    if (ok) { await sleep(600); return true; }
+  }
+  return false;
 }
 // tiempo de render: hasta que aparezca el reproductor o la página deje de crecer
 // list = página de lista (portada, categoría): un video de fondo NO significa que ya terminó de armarse; se espera
@@ -184,17 +198,22 @@ function learn(jsons, url, name) {
   for (const j of jsons) visit(j);
   if (!hit) return null;
   const o = hit.obj, keys = Object.keys(o).filter((k) => typeof o[k] === "string");
-  const nameKey = (name && keys.find((k) => normS(o[k]) === normS(name))) || ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof o[k] === "string");
+  const nn = normS(name);
+  const nameKey = (nn && (keys.find((k) => normS(o[k]) === nn) || keys.find((k) => o[k].length > 3 && /\s|[A-ZÁÉÍÓÚ]/.test(o[k]) && (nn.includes(normS(o[k])) || normS(o[k]).includes(nn)))))
+    || ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof o[k] === "string");
   if (!nameKey) return null;
   const IMG = /^https?:\/\/\S+\.(jpe?g|png|webp|avif)(\?|$)/i;
   let imgKey = keys.find((k) => IMG.test(o[k]));
   if (!imgKey) for (const [k, v] of Object.entries(o)) if (v && typeof v === "object" && !Array.isArray(v)) { const k2 = Object.keys(v).find((x) => typeof v[x] === "string" && IMG.test(v[x])); if (k2) { imgKey = k + "." + k2; break; } }
   const typeKey = ["type", "contentType", "content_type", "kind", "mediaType", "assetType", "category"].find((k) => typeof o[k] === "string");
   // urn: el enlace es /<tipo>/<slug> con los dos últimos pedazos del identificador (/movie/x, /tvseries/y…)
+  // ¿qué campo dice el tipo que va en el camino? (/movie/x → un campo con «movie»)
+  let segKey = "", segIdx = -1;
+  try { const sg = new URL(url).pathname.split("/").filter(Boolean); for (let i = 0; i < sg.length - 1 && !segKey; i++) { const k2 = keys.find((k) => k !== hit.k && o[k].toLowerCase() === sg[i].toLowerCase()); if (k2) { segKey = k2; segIdx = i; } } } catch {}
   let urn2 = false;
   if (hit.urn) { const sg = o[hit.k].split(":"); try { urn2 = new URL(url).pathname.replace(/\/+$/, "") === "/" + sg.slice(-2).join("/"); } catch {} }
   if (hit.urn && !urn2) return null;
-  return { k: hit.k, path: hit.path, urn2, urnType: urn2 ? o[hit.k].split(":").slice(-2)[0] : "", nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
+  return { k: hit.k, path: hit.path, urn2, segKey, segIdx, urnType: urn2 ? o[hit.k].split(":").slice(-2)[0] : "", nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
 }
 // el mismo enlace del título aprendido, con el «slug» de otro título en su lugar (nada inventado: es el campo del sitio)
 function swapTail(url, tail, v) {
@@ -210,11 +229,19 @@ function applyLearn(jsons, L) {
     if (!o || typeof o !== "object" || out.length >= 400) return;
     if (Array.isArray(o)) { o.forEach(visit); return; }
     const v = o[L.k], nm = o[L.nameKey];
-    const ownPath = L.path || L.urn2; // cada uno trae su propio camino: sirve para películas y series a la vez
+    const ownPath = L.path || L.urn2 || !!L.segKey; // cada uno trae su propio camino: sirve para películas y series a la vez
     if (typeof v === "string" && v && typeof nm === "string" && nm.trim() && (ownPath || !L.typeKey || o[L.typeKey] === L.typeVal)) {
       let u = "";
       try {
         if (L.urn2) { const sg = v.split(":"); if (sg.length >= 3 && (sg[sg.length - 2] === L.urnType || /^(movies?|tvseries|series|shows?|channels?|live|specials?|documentar(y|ies))$/i.test(sg[sg.length - 2]))) u = new URL("/" + sg.slice(-2).join("/"), L.url).href; }
+        else if (L.segKey && !L.path) { // /<tipo>/<slug> con el tipo y el slug de cada uno
+          const ty = o[L.segKey];
+          const seg0 = new URL(L.url).pathname.split("/").filter(Boolean)[L.segIdx].toLowerCase();
+          // el mismo tipo que se abrió, u otro tipo de contenido del sitio usado igual en el camino (/movie/ ↔ /tvseries/)
+          if (typeof ty === "string" && (ty.toLowerCase() === seg0 || (/^(movies?|tvseries|series|shows?)$/i.test(ty) && /^(movies?|tvseries|series|shows?)$/i.test(seg0))) && /^[\w.~%-]+$/.test(v)) {
+            const uu = new URL(swapTail(L.url, L.tail, v)); const sg = uu.pathname.split("/"); const i = sg.findIndex((x) => x.toLowerCase() === seg0); if (i >= 0) sg[i] = ty; uu.pathname = sg.join("/"); u = uu.href;
+          }
+        }
         else u = L.path ? new URL(v, L.url).href : /^[\w.~%-]+$/.test(v) ? swapTail(L.url, L.tail, v) : "";
       } catch {}
       if (u && !seen.has(u)) { seen.add(u); const im = L.imgKey ? L.imgKey.split(".").reduce((a, k) => (a && typeof a === "object" ? a[k] : undefined), o) : ""; out.push({ url: u, name: nm.trim().slice(0, 120), img: typeof im === "string" ? im : "", via: "datos del sitio" }); }
@@ -404,7 +431,9 @@ async function directTest(page, ctx, job, code, emit) {
     let v = await newVideo(page);
     let action = "direct";
     if (!v || a.arch === "PLAYER_PENDING" || a.player.playButton) {
-      const cta = await page.evaluate(ctaMark).catch(() => null);
+      await acceptConsent(page);
+      let cta = null;
+      for (let k = 0; k < 20 && !cta; k++) { await page.evaluate(DEEP).catch(() => {}); cta = await page.evaluate(ctaMark).catch(() => null); if (!cta) await sleep(200); }
       if (cta) {
         action = `clic en «${cta.text}»`;
         const pop = page.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
