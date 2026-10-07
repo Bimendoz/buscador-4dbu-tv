@@ -15,6 +15,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const RENDER = { load: 15000, settle: 8000, poll: 300, scrolls: 4, scrollWait: 400, maxCards: 30, cardsMs: 120000 };
 // lo aprendido de un sitio (qué campo de sus datos forma el enlace de cada título) sirve para sus demás páginas
 const LEARNED = new Map();
+// a dónde lleva «Ver ahora» en cada sitio (lo que el propio sitio mostró: /movie/x → /player/movie/x)
+const PLAYER_ROUTE = new Map();
 
 // ---------------------------------------------------------------- utilidades dentro de la página
 // recorre TODO el documento, también el interior de los componentes (shadow DOM abierto)
@@ -87,9 +89,22 @@ async function acceptConsent(page) {
   for (const f of page.frames()) {
     const ok = await f.evaluate(() => {
       const all = window.__x4deep ? window.__x4deep() : [...document.querySelectorAll("*")];
-      const OK = /^(aceptar( todo| todas| y continuar| cookies)?|acepto|accept( all| cookies)?|allow all|permitir( todo| todas)?|entendido|de acuerdo|estoy de acuerdo|ok|got it|agree|i agree|continuar)$/i;
-      const b = all.find((e) => (e.tagName === "BUTTON" || e.getAttribute?.("role") === "button" || e.tagName === "A") && OK.test((e.innerText || e.textContent || "").replace(/\s+/g, " ").trim()) && e.getBoundingClientRect().width > 20);
-      if (!b) return false; b.click(); return true;
+      const OK = /^(acepta|aceptar|acepto|accept|allow|permitir|entendido|de acuerdo|estoy de acuerdo|ok\b|got it|agree|i agree|continuar$)/i;
+      const btns = all.filter((e) => (e.tagName === "BUTTON" || e.getAttribute?.("role") === "button" || e.tagName === "A") && e.getBoundingClientRect().width > 20);
+      const txt = (e) => (e.innerText || e.textContent || "").replace(/\s+/g, " ").trim();
+      const b = btns.find((e) => { const t = txt(e); return t.length < 45 && OK.test(t) && !/rechaz|reject|config|ajust|manage|prefer/i.test(t); });
+      let did = false;
+      if (b) { b.click(); did = true; }
+      // si aún queda la capa del aviso de privacidad/cookies encima de todo, se quita (no es una protección del video)
+      setTimeout(() => {
+        for (const e of all) {
+          if (!e.isConnected) continue;
+          const t = (e.innerText || "").slice(0, 400);
+          if (/cookie|privacidad|privacy|consent/i.test(t) && /overlay|dialog|modal|consent|cookie|banner/i.test((typeof e.className === "string" ? e.className : "") + " " + (e.id || "") + " " + (e.getAttribute("role") || ""))) e.remove();
+        }
+        document.querySelectorAll(".cdk-overlay-backdrop").forEach((x) => x.remove());
+      }, 300);
+      return did || /cookie|privacidad|privacy/i.test((document.body?.innerText || "").slice(-3000));
     }).catch(() => false);
     if (ok) { await sleep(600); return true; }
   }
@@ -186,22 +201,26 @@ function jsonTap(page) {
 const normS = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 // con UN título ya abierto (su enlace real) se aprende qué campo de esos datos forma el enlace de cada título
 function learn(jsons, url, name) {
+  learn.why = "";
   let tail = ""; try { tail = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || ""); } catch {}
   if (!tail || tail.length < 3) return null;
-  let hit = null;
-  const visit = (o) => {
-    if (hit || !o || typeof o !== "object") return;
-    if (Array.isArray(o)) { for (const x of o) visit(x); return; }
-    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && (v === tail || v.endsWith("/" + tail) || v.endsWith(":" + tail))) { hit = { k, obj: o, path: v.endsWith("/" + tail), urn: v.endsWith(":" + tail) }; return; }
-    for (const v of Object.values(o)) visit(v);
+  const hits = [];
+  const visit = (o, parent) => {
+    if (!o || typeof o !== "object" || hits.length > 40) return;
+    if (Array.isArray(o)) { for (const x of o) visit(x, parent); return; }
+    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && (v === tail || v.endsWith("/" + tail) || v.endsWith(":" + tail))) { hits.push({ k, obj: o, parent, path: v.endsWith("/" + tail), urn: v.endsWith(":" + tail) }); break; }
+    for (const v of Object.values(o)) if (v && typeof v === "object") visit(v, o);
   };
-  for (const j of jsons) visit(j);
-  if (!hit) return null;
-  const o = hit.obj, keys = Object.keys(o).filter((k) => typeof o[k] === "string");
+  for (const j of jsons) visit(j, null);
+  if (!hits.length) return null;
   const nn = normS(name);
-  const nameKey = (nn && (keys.find((k) => normS(o[k]) === nn) || keys.find((k) => o[k].length > 3 && /\s|[A-ZÁÉÍÓÚ]/.test(o[k]) && (nn.includes(normS(o[k])) || normS(o[k]).includes(nn)))))
-    || ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof o[k] === "string");
-  if (!nameKey) return null;
+  const findName = (o) => { if (!o) return ""; const ks = Object.keys(o).filter((k) => typeof o[k] === "string"); return (nn && (ks.find((k) => normS(o[k]) === nn) || ks.find((k) => o[k].length > 3 && /\s|[A-ZÁÉÍÓÚ]/.test(o[k]) && (nn.includes(normS(o[k])) || normS(o[k]).includes(nn))))) || ""; };
+  let hit = null, nameKey = "", fromParent = false;
+  for (const h of hits) { const a = findName(h.obj); if (a) { hit = h; nameKey = a; break; } }
+  if (!hit) for (const h of hits) { const a = findName(h.parent); if (a) { hit = h; nameKey = a; fromParent = true; break; } }
+  if (!hit) { hit = hits[0]; nameKey = ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof hit.obj[k] === "string") || ""; }
+  if (!nameKey) { learn.why = "campos: " + Object.entries(hits[0].obj).slice(0, 18).map(([k, v]) => k + "=" + (typeof v === "string" ? v.slice(0, 18) : Array.isArray(v) ? "[…]" : typeof v === "object" && v ? "{…}" : v)).join(" "); return null; }
+  const o = hit.obj, keys = Object.keys(o).filter((k) => typeof o[k] === "string");
   const IMG = /^https?:\/\/\S+\.(jpe?g|png|webp|avif)(\?|$)/i;
   let imgKey = keys.find((k) => IMG.test(o[k]));
   if (!imgKey) for (const [k, v] of Object.entries(o)) if (v && typeof v === "object" && !Array.isArray(v)) { const k2 = Object.keys(v).find((x) => typeof v[x] === "string" && IMG.test(v[x])); if (k2) { imgKey = k + "." + k2; break; } }
@@ -213,7 +232,7 @@ function learn(jsons, url, name) {
   let urn2 = false;
   if (hit.urn) { const sg = o[hit.k].split(":"); try { urn2 = new URL(url).pathname.replace(/\/+$/, "") === "/" + sg.slice(-2).join("/"); } catch {} }
   if (hit.urn && !urn2) return null;
-  return { k: hit.k, path: hit.path, urn2, segKey, segIdx, urnType: urn2 ? o[hit.k].split(":").slice(-2)[0] : "", nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
+  return { k: hit.k, path: hit.path, urn2, segKey, segIdx, fromParent, urnType: urn2 ? o[hit.k].split(":").slice(-2)[0] : "", nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
 }
 // el mismo enlace del título aprendido, con el «slug» de otro título en su lugar (nada inventado: es el campo del sitio)
 function swapTail(url, tail, v) {
@@ -225,10 +244,10 @@ function swapTail(url, tail, v) {
 }
 function applyLearn(jsons, L) {
   const out = [], seen = new Set();
-  const visit = (o) => {
+  const visit = (o, parent) => {
     if (!o || typeof o !== "object" || out.length >= 400) return;
-    if (Array.isArray(o)) { o.forEach(visit); return; }
-    const v = o[L.k], nm = o[L.nameKey];
+    if (Array.isArray(o)) { o.forEach((x) => visit(x, parent)); return; }
+    const v = o[L.k], nm = L.fromParent ? parent?.[L.nameKey] : o[L.nameKey];
     const ownPath = L.path || L.urn2 || !!L.segKey; // cada uno trae su propio camino: sirve para películas y series a la vez
     if (typeof v === "string" && v && typeof nm === "string" && nm.trim() && (ownPath || !L.typeKey || o[L.typeKey] === L.typeVal)) {
       let u = "";
@@ -246,9 +265,9 @@ function applyLearn(jsons, L) {
       } catch {}
       if (u && !seen.has(u)) { seen.add(u); const im = L.imgKey ? L.imgKey.split(".").reduce((a, k) => (a && typeof a === "object" ? a[k] : undefined), o) : ""; out.push({ url: u, name: nm.trim().slice(0, 120), img: typeof im === "string" ? im : "", via: "datos del sitio" }); }
     }
-    Object.values(o).forEach(visit);
+    Object.values(o).forEach((x) => { if (x && typeof x === "object") visit(x, o); });
   };
-  jsons.forEach(visit);
+  jsons.forEach((j) => visit(j, null));
   return out;
 }
 // tocar una tarjeta y ver a qué título lleva (vuelve atrás después)
@@ -317,7 +336,7 @@ async function discoverCards(ctx, page, home, tap, emit) {
     let tail = ""; try { tail = new URL(first.url).pathname.split("/").filter(Boolean).pop() || ""; } catch {}
     let ctxs = "";
     for (const b of tap.bodies) { const t = JSON.stringify(b); const i = tail ? t.indexOf(tail) : -1; if (i >= 0) { ctxs = t.slice(Math.max(0, i - 70), i + tail.length + 20).replace(/https?:\/\/[^"\\]+/g, "(url)"); break; } }
-    emit({ type: "spa-stage", stage: `TEMPLATE_MISS datos=${tap.bodies.length} ${ctxs ? "visto: " + ctxs : "el título no aparece en los datos"}`, ms: Date.now() - t0 });
+    emit({ type: "spa-stage", stage: `TEMPLATE_MISS datos=${tap.bodies.length} nombre=«${first.name}» ${learn.why || (ctxs ? "visto: " + ctxs : "el título no aparece en los datos")}`, ms: Date.now() - t0 });
   }
   if (L) {
     const byName = new Map(cards.map((c) => [normS(c.name), c.img]));
@@ -437,8 +456,17 @@ async function directTest(page, ctx, job, code, emit) {
       if (cta) {
         action = `clic en «${cta.text}»`;
         const pop = page.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
+        const path0 = new URL(page.url()).pathname;
         await page.mouse.click(cta.x, cta.y).catch(() => page.evaluate(() => window.__x4cta?.click()).catch(() => {}));
         stage("ACTION_EXECUTED");
+        // ¿el clic hizo algo? si no cambió de página ni apareció el video, clic por código; y si el sitio ya mostró
+        // a dónde lleva «Ver ahora» (/player/…), se va directo ahí
+        const moved = async (ms) => { for (let k = 0; k < ms / 200; k++) { await sleep(200); if (new URL(page.url()).pathname !== path0 || (await newVideo(page))) return true; } return false; };
+        let ok = await moved(2400);
+        if (!ok) { await acceptConsent(page); await page.evaluate(() => window.__x4cta?.click()).catch(() => {}); ok = await moved(1600); }
+        let host = ""; try { host = new URL(page.url()).hostname; } catch {}
+        if (ok) { const p1 = new URL(page.url()).pathname; if (p1 !== path0 && p1.endsWith(path0)) PLAYER_ROUTE.set(host, p1.slice(0, p1.length - path0.length)); }
+        else if (PLAYER_ROUTE.has(host)) { action += " · ir al reproductor"; await page.goto(new URL(PLAYER_ROUTE.get(host) + path0, page.url()).href, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {}); await acceptConsent(page); }
         const p = await pop;
         if (p) { await sleep(800); const pv = await findVideo(p).catch(() => null); if (pv) { v = pv; stage("PLAYER_FOUND"); } else p.close().catch(() => {}); }
       } else if (!v) stage("ACTION_EXECUTED");
@@ -622,3 +650,4 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
     await browser?.close().catch(() => {});
   }
 }
+export { learn as __learn, applyLearn as __applyLearn };
