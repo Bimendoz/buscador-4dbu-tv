@@ -143,14 +143,17 @@ function cardsCollect() {
     const r = im.getBoundingClientRect(), w = r.width || im.width, h = r.height || im.height;
     if (w < 80 || h < 60 || inLink(im)) continue;
     const src = im.currentSrc || im.src || "";
-    if (!src || seen.has(src) || /logo|icon|avatar|sprite|banner-ad/i.test(src + " " + im.className)) continue;
+    if (!src || seen.has(src) || /logo|icon|avatar|sprite|banner-ad|social/i.test(src + " " + im.className + " " + (im.alt || ""))) continue;
+    if (w > innerWidth * 0.6) continue; // un banner o la portada grande, no una carátula
     seen.add(src);
+    // ¿está en el carrusel grande de arriba (hero)? esas van al final
+    let hero = false; for (let x = im, k = 0; x && k < 14; x = x.parentElement || (x.getRootNode && x.getRootNode().host), k++) { const t = (x.tagName || "") + " " + (typeof x.className === "string" ? x.className : ""); if (/hero|banner|billboard|jumbotron/i.test(t)) { hero = true; break; } }
     let name = im.alt || im.getAttribute("aria-label") || im.title || "";
     if (!name) { let p = im.parentElement; for (let k = 0; k < 4 && p && !name; k++, p = p.parentElement) name = (p.getAttribute && (p.getAttribute("aria-label") || p.title)) || (p.innerText || "").trim().split("\n")[0].slice(0, 80); }
     window.__x4cards.push(im);
-    out.push({ i: window.__x4cards.length - 1, name: name.trim(), img: src });
+    out.push({ i: window.__x4cards.length - 1, name: name.trim(), img: src, hero, w: Math.round(w), h: Math.round(h) });
   }
-  return out;
+  return out.sort((a, b) => a.hero - b.hero);
 }
 // ---- datos del propio sitio: las listas JSON que piden sus carruseles (título, imagen y el «slug» de cada uno)
 function jsonTap(page) {
@@ -217,15 +220,27 @@ async function clickCard(page, home, c) {
   await page.evaluate(DEEP).catch(() => {});
   const list = await page.evaluate(cardsCollect).catch(() => []);
   const cur = list.find((x) => x.img === c.img); if (!cur) return null;
-  const pt = await page.evaluate((i) => { const e = window.__x4cards[i]; e.scrollIntoView({ block: "center", inline: "center" }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, cur.i);
-  await sleep(200);
+  const geo = () => page.evaluate((i) => {
+    const e = window.__x4cards[i]; e.scrollIntoView({ block: "center", inline: "center" });
+    const r = e.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    let t = document.elementFromPoint(x, y); for (let k = 0; t && t.shadowRoot && k < 6; k++) { const u = t.shadowRoot.elementFromPoint(x, y); if (!u || u === t) break; t = u; }
+    const d = (n) => n ? n.tagName.toLowerCase() + (typeof n.className === "string" && n.className.trim() ? "." + n.className.trim().split(/\s+/)[0] : "") : "-";
+    return { x, y, w: Math.round(r.width), h: Math.round(r.height), top: d(t) + " < " + d(t?.parentElement || t?.getRootNode?.()?.host) };
+  }, cur.i);
+  let pt = await geo();
   const before = page.url();
-  const pop = page.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
+  const navd = async (ms) => { for (let k = 0; k < ms / 200; k++) { await sleep(200); if (page.url() !== before) return page.url(); } return ""; };
+  const pop = page.waitForEvent("popup", { timeout: 4000 }).catch(() => null);
+  await page.mouse.move(pt.x, pt.y, { steps: 4 }); await sleep(450); // pasar el mouse (muchas tarjetas se agrandan al pasar)
+  pt = await geo();
   await page.mouse.click(pt.x, pt.y);
-  let url = "";
-  for (let k = 0; k < 12 && !url; k++) { await sleep(200); if (page.url() !== before) url = page.url(); }
+  let url = await navd(3000);
+  if (!url) { // clic por código en la tarjeta y en lo que la envuelve (dentro del componente)
+    await page.evaluate((i) => { let x = window.__x4cards[i]; for (let k = 0; x && k < 5; k++, x = x.parentElement || (x.getRootNode && x.getRootNode().host)) { x.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, cancelable: true, view: window })); } }, cur.i).catch(() => {});
+    url = await navd(2000);
+  }
   const p = await Promise.race([pop, sleep(50).then(() => null)]); if (p) { if (!url) url = p.url(); p.close().catch(() => {}); }
-  if (!url || url === home) { await page.keyboard.press("Escape").catch(() => {}); return null; }
+  if (!url || url === home) { clickCard.fails = (clickCard.fails || []).concat(`${pt.w}x${pt.h} encima: ${pt.top}`).slice(-6); await page.keyboard.press("Escape").catch(() => {}); return null; }
   let name = c.name;
   if (!name) { await sleep(800); name = await page.evaluate(() => (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title || "").trim().slice(0, 120)).catch(() => ""); }
   await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
@@ -249,8 +264,10 @@ async function discoverCards(ctx, page, home, tap, emit) {
     if (all.filter((x) => byName.has(normS(x.name))).length >= Math.min(3, cards.length)) { emit({ type: "spa-stage", stage: `TEMPLATE ${all.length}`, ms: Date.now() - t0 }); return all; }
   }
   let first = null;
-  for (const c of cards.slice(0, 3)) { first = await clickCard(page, home, c).catch((e) => { if (isBrowserInfrastructureError(e)) throw e; return null; }); if (first) break; }
-  if (!first) return [];
+  clickCard.fails = [];
+  for (const c of cards.slice(0, 8)) { first = await clickCard(page, home, c).catch((e) => { if (isBrowserInfrastructureError(e)) throw e; return null; }); if (first) break; }
+  for (const f of clickCard.fails) emit({ type: "spa-stage", stage: `CLICK_FAIL ${f}`, ms: Date.now() - t0 });
+  if (!first) { emit({ type: "spa-stage", stage: `CARDS_SAMPLE ${cards.slice(0, 4).map((c) => `${c.w}x${c.h}${c.hero ? " hero" : ""} «${c.name.slice(0, 30)}»`).join(" | ")}`, ms: Date.now() - t0 }); return []; }
   found.push(first);
   const L = learn(tap.bodies, first.url, first.name);
   if (L) {
