@@ -58,6 +58,14 @@ async function relayFor(r, ctx, page, UA, emit) {
   } catch (e) { emit({ type: "relay", ok: false, why: String(e?.message || e).slice(0, 160) }); return null; }
 }
 
+// ---------- MODO «SPA» (adaptador nuevo y aparte, spa.mjs): mira una página armada con JavaScript ----------
+// Solo responde la arquitectura (MULTI_SOURCE / DIRECT_PLAYER / PLAYER_PENDING) o la página ya armada. No toca los demás modos.
+if (job.mode === "spa") {
+  try { const { run } = await import("./spa.mjs"); await run(job, { send, launchChrome, isCancel: () => cancel, maxMs: MAX_MIN * 60e3 }); }
+  catch (e) { await send({ status: "done", job: { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] } }); }
+  process.exit(0);
+}
+
 // ---------- MODO «TÍTULO»: probar TODAS las fuentes de un título en UNA sola sesión, en orden ----------
 // Es el navegador del explorador (ya no el de Cloudflare): mismo explorar.js que usa tu página. Abre el título,
 // toca cada fuente (clic real), sigue iframe / pestaña nueva / navegación, da clic en el centro del reproductor y
