@@ -12,7 +12,9 @@ import { networkMonitor, findVideo, attemptPlayback, verifyPlayback, isBrowserIn
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 const AD = /(^|\.)(imasdk\.googleapis\.com|doubleclick\.net|googlesyndication\.com|googleadservices\.com|adnxs(-simple)?\.com|teads\.tv|outbrain(img)?\.com|taboola\.com|pubmatic\.com|adsrvr\.org|amazon-adsystem\.com|criteo\.(com|net)|rubiconproject\.com|scorecardresearch\.com|2mdn\.net|adtrafficquality\.google|facebook\.com|googletagmanager\.com)$/i;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export const RENDER = { load: 15000, settle: 8000, poll: 300, scrolls: 6, scrollWait: 600, maxCards: 30, cardsMs: 120000 };
+export const RENDER = { load: 15000, settle: 8000, poll: 300, scrolls: 4, scrollWait: 400, maxCards: 30, cardsMs: 120000 };
+// lo aprendido de un sitio (qué campo de sus datos forma el enlace de cada título) sirve para sus demás páginas
+const LEARNED = new Map();
 
 // ---------------------------------------------------------------- utilidades dentro de la página
 // recorre TODO el documento, también el interior de los componentes (shadow DOM abierto)
@@ -148,36 +150,134 @@ function cardsCollect() {
   }
   return out;
 }
-async function discoverCards(page, home, emit) {
+// ---- datos del propio sitio: las listas JSON que piden sus carruseles (título, imagen y el «slug» de cada uno)
+function jsonTap(page) {
+  const bodies = [];
+  const on = async (res) => {
+    try {
+      const rt = res.request().resourceType(), ct = (res.headers() || {})["content-type"] || "";
+      if (!/^(xhr|fetch)$/.test(rt) || !/json/i.test(ct) || res.status() >= 400 || bodies.length >= 60) return;
+      const t = await res.text(); if (t.length > 3e6) return;
+      bodies.push(JSON.parse(t));
+    } catch {}
+  };
+  page.on("response", on);
+  return { bodies, stop: () => { try { page.off("response", on); } catch {} } };
+}
+const normS = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+// con UN título ya abierto (su enlace real) se aprende qué campo de esos datos forma el enlace de cada título
+function learn(jsons, url, name) {
+  let tail = ""; try { tail = decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || ""); } catch {}
+  if (!tail || tail.length < 3) return null;
+  let hit = null;
+  const visit = (o) => {
+    if (hit || !o || typeof o !== "object") return;
+    if (Array.isArray(o)) { for (const x of o) visit(x); return; }
+    for (const [k, v] of Object.entries(o)) if (typeof v === "string" && (v === tail || v.endsWith("/" + tail))) { hit = { k, obj: o, path: v !== tail }; return; }
+    for (const v of Object.values(o)) visit(v);
+  };
+  for (const j of jsons) visit(j);
+  if (!hit) return null;
+  const o = hit.obj, keys = Object.keys(o).filter((k) => typeof o[k] === "string");
+  const nameKey = (name && keys.find((k) => normS(o[k]) === normS(name))) || ["title", "name", "titulo", "displayName", "label", "originalTitle"].find((k) => typeof o[k] === "string");
+  if (!nameKey) return null;
+  const imgKey = keys.find((k) => /^https?:\/\/\S+\.(jpe?g|png|webp|avif)(\?|$)/i.test(o[k]));
+  const typeKey = ["type", "contentType", "content_type", "kind", "mediaType", "assetType", "category"].find((k) => typeof o[k] === "string");
+  return { k: hit.k, path: hit.path, nameKey, imgKey, typeKey, typeVal: typeKey ? o[typeKey] : null, url, tail };
+}
+// el mismo enlace del título aprendido, con el «slug» de otro título en su lugar (nada inventado: es el campo del sitio)
+function swapTail(url, tail, v) {
+  const u = new URL(url), segs = u.pathname.split("/");
+  const k = segs.map((x) => { try { return decodeURIComponent(x); } catch { return x; } }).lastIndexOf(tail);
+  if (k < 0) return "";
+  segs[k] = encodeURIComponent(v); u.pathname = segs.join("/"); u.search = ""; u.hash = "";
+  return u.href;
+}
+function applyLearn(jsons, L) {
+  const out = [], seen = new Set();
+  const visit = (o) => {
+    if (!o || typeof o !== "object" || out.length >= 400) return;
+    if (Array.isArray(o)) { o.forEach(visit); return; }
+    const v = o[L.k], nm = o[L.nameKey];
+    if (typeof v === "string" && v && typeof nm === "string" && nm.trim() && (!L.typeKey || o[L.typeKey] === L.typeVal)) {
+      let u = "";
+      try { u = L.path ? new URL(v, L.url).href : /^[\w.~%-]+$/.test(v) ? swapTail(L.url, L.tail, v) : ""; } catch {}
+      if (u && !seen.has(u)) { seen.add(u); out.push({ url: u, name: nm.trim().slice(0, 120), img: L.imgKey && typeof o[L.imgKey] === "string" ? o[L.imgKey] : "", via: "datos del sitio" }); }
+    }
+    Object.values(o).forEach(visit);
+  };
+  jsons.forEach(visit);
+  return out;
+}
+// tocar una tarjeta y ver a qué título lleva (vuelve atrás después)
+async function clickCard(page, home, c) {
+  if (page.url() !== home) { await page.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); await settle(page, () => {}, 5000); }
+  await page.evaluate(DEEP).catch(() => {});
+  const list = await page.evaluate(cardsCollect).catch(() => []);
+  const cur = list.find((x) => x.img === c.img); if (!cur) return null;
+  const pt = await page.evaluate((i) => { const e = window.__x4cards[i]; e.scrollIntoView({ block: "center", inline: "center" }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, cur.i);
+  await sleep(200);
+  const before = page.url();
+  const pop = page.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
+  await page.mouse.click(pt.x, pt.y);
+  let url = "";
+  for (let k = 0; k < 12 && !url; k++) { await sleep(200); if (page.url() !== before) url = page.url(); }
+  const p = await Promise.race([pop, sleep(50).then(() => null)]); if (p) { if (!url) url = p.url(); p.close().catch(() => {}); }
+  if (!url || url === home) { await page.keyboard.press("Escape").catch(() => {}); return null; }
+  let name = c.name;
+  if (!name) { await sleep(800); name = await page.evaluate(() => (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title || "").trim().slice(0, 120)).catch(() => ""); }
+  await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
+  await settle(page, () => {}, 4000);
+  return { url, name: name || url.split("/").filter(Boolean).pop().replace(/-/g, " "), img: c.img };
+}
+// RÁPIDO: se toca UNA tarjeta; con su enlace se leen los demás de los datos del sitio. Si no se puede,
+// se tocan las tarjetas en 4 pestañas a la vez.
+async function discoverCards(ctx, page, home, tap, emit) {
   await page.evaluate(DEEP).catch(() => {});
   const cards = (await page.evaluate(cardsCollect).catch(() => [])).slice(0, RENDER.maxCards);
-  const found = [], t0 = Date.now();
-  if (!cards.length) return found;
+  if (!cards.length) return [];
+  const t0 = Date.now();
   emit({ type: "spa-stage", stage: `CARDS_FOUND ${cards.length}`, ms: 0 });
-  for (const c of cards) {
-    if (Date.now() - t0 > RENDER.cardsMs) break;
-    try {
-      if (page.url() !== home) { await page.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); await settle(page, () => {}, 5000); }
-      await page.evaluate(DEEP).catch(() => {});
-      const list = await page.evaluate(cardsCollect).catch(() => []);
-      const cur = list.find((x) => x.img === c.img); if (!cur) continue;
-      const pt = await page.evaluate((i) => { const e = window.__x4cards[i]; e.scrollIntoView({ block: "center", inline: "center" }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, cur.i);
-      await sleep(250);
-      const before = page.url();
-      const pop = page.waitForEvent("popup", { timeout: 2500 }).catch(() => null);
-      await page.mouse.click(pt.x, pt.y);
-      let url = "";
-      for (let k = 0; k < 12 && !url; k++) { await sleep(250); if (page.url() !== before) url = page.url(); }
-      const p = await Promise.race([pop, sleep(50).then(() => null)]); if (p) { if (!url) url = p.url(); p.close().catch(() => {}); }
-      if (!url || url === home) { await page.keyboard.press("Escape").catch(() => {}); continue; }
-      let name = c.name;
-      if (!name) { await sleep(900); name = await page.evaluate(() => (document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title || "").trim().slice(0, 120)).catch(() => ""); }
-      found.push({ url, name: name || url.split("/").filter(Boolean).pop().replace(/-/g, " "), img: c.img });
-      emit({ type: "spa-stage", stage: `CARD ${found.length}`, ms: Date.now() - t0 });
-      await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
-      await settle(page, () => {}, 5000);
-    } catch (e) { if (isBrowserInfrastructureError(e)) throw e; }
+  const found = [];
+  let host = ""; try { host = new URL(home).hostname; } catch {}
+  const known = LEARNED.get(host);
+  if (known) { // ya se aprendió en otra página del sitio: sin tocar nada
+    const byName = new Map(cards.map((c) => [normS(c.name), c.img]));
+    const all = applyLearn(tap.bodies, known).map((x) => ({ ...x, img: x.img || byName.get(normS(x.name)) || "" }));
+    if (all.filter((x) => byName.has(normS(x.name))).length >= Math.min(3, cards.length)) { emit({ type: "spa-stage", stage: `TEMPLATE ${all.length}`, ms: Date.now() - t0 }); return all; }
   }
+  let first = null;
+  for (const c of cards.slice(0, 3)) { first = await clickCard(page, home, c).catch((e) => { if (isBrowserInfrastructureError(e)) throw e; return null; }); if (first) break; }
+  if (!first) return [];
+  found.push(first);
+  const L = learn(tap.bodies, first.url, first.name);
+  if (L) {
+    const byName = new Map(cards.map((c) => [normS(c.name), c.img]));
+    const all = applyLearn(tap.bodies, L).map((x) => ({ ...x, img: x.img || byName.get(normS(x.name)) || "" }));
+    if (all.some((x) => x.url === first.url)) {
+      LEARNED.set(host, L);
+      emit({ type: "spa-stage", stage: `TEMPLATE ${all.length}`, ms: Date.now() - t0 });
+      // las tarjetas que esos datos no cubren (otro tipo de contenido) se tocan
+      const have = new Set(all.map((x) => normS(x.name)));
+      const rest = cards.filter((c) => c.name && !have.has(normS(c.name))).slice(0, 8);
+      for (const c of rest) { const r = await clickCard(page, home, c).catch(() => null); if (r) all.push(r); }
+      return all;
+    }
+  }
+  // sin datos que leer: 4 pestañas a la vez
+  const todo = cards.filter((c) => c.img !== first.img);
+  const pages = [page];
+  for (let k = 1; k < 4 && k <= todo.length / 3; k++) { const p = await ctx.newPage(); p.on("popup", (x) => x.close().catch(() => {})); await p.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {}); pages.push(p); }
+  await Promise.all(pages.slice(1).map((p) => settle(p, () => {}, 6000)));
+  let next = 0;
+  await Promise.all(pages.map(async (p) => {
+    while (next < todo.length && Date.now() - t0 < RENDER.cardsMs) {
+      const c = todo[next++];
+      const r = await clickCard(p, home, c).catch((e) => { if (isBrowserInfrastructureError(e)) throw e; return null; });
+      if (r) { found.push(r); emit({ type: "spa-stage", stage: `CARD ${found.length}`, ms: Date.now() - t0 }); }
+    }
+  }));
+  for (const p of pages.slice(1)) p.close().catch(() => {});
   if (page.url() !== home) await page.goto(home, { waitUntil: "domcontentloaded", timeout: RENDER.load }).catch(() => {});
   return found;
 }
@@ -301,18 +401,12 @@ async function relayFor(res, ctx, page, emit) {
   } catch (e) { emit({ type: "relay", ok: false, why: String(e?.message || e).slice(0, 160) }); return null; }
 }
 
-export async function run(job, { send, launchChrome, isCancel = () => false, maxMs = 340 * 60e3 }) {
-  const events = [], START = Date.now();
-  let chain = Promise.resolve();
-  const flush = (status = "running") => { chain = chain.then(() => send({ status, job: { status, events } })); return chain; };
-  let lastSend = 0;
-  const emit = (e) => { events.push(e); if (e.type !== "stage" || Date.now() - lastSend > 1500) { lastSend = Date.now(); flush(); } };
-  let browser, relay = null;
+// ---------------------------------------------------------------- una tarea (pagina · titulo · directo)
+async function task(browser, job, code, emit, keep) {
+  const que = job.que || "titulo";
+  const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
+  let kept = false;
   try {
-    const code = job.code || (process.env.TV_URL ? await (await fetch(process.env.TV_URL.replace(/\/+$/, "") + "/explorador-dom.js")).text().catch(() => "") : "");
-    browser = await launchChrome({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
-    const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 720 }, locale: "es-CO", ignoreHTTPSErrors: true });
-    const que = job.que || "titulo";
     await ctx.route("**/*", (r) => { let h = ""; try { h = new URL(r.request().url()).hostname; } catch {} const t = r.request().resourceType();
       return AD.test(h) || t === "font" || (que === "directo" && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
     const page = await ctx.newPage();
@@ -321,36 +415,95 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
       const res = await directTest(page, ctx, job, code, emit);
       emit({ ...res, type: "result", sourceType: res.type });
       const ok = res.status === "working";
-      if (ok && job.relay) relay = await relayFor(res, ctx, page, emit);
+      if (ok && job.relay) { const rl = await keep.relay(res, ctx, page, emit); if (rl) kept = true; }
       emit({ type: "done", status: ok ? "working" : res.status === "browser_error" ? "browser_error" : "failed", reason: ok ? null : res.status === "browser_error" ? "BROWSER_UNAVAILABLE" : "NO_WORKING_SOURCE", selected_source: ok ? { name: res.name, index: 1 } : null });
-    } else {
-      const pagina = que === "pagina";
-      page.on("popup", (p) => p.close().catch(() => {}));
-      const rd = await render(page, job.url, { scroll: pagina, emit });
-      if (!rd.ok) emit({ type: "spa", ok: false, reason: "SOURCE_ERROR", detail: "la página no abrió", stages: rd.stages });
-      else {
-        const a = await detectSiteArchitecture(page, { url: job.url, code });
-        const out = { type: "spa", ok: true, url: page.url(), title: await page.title().catch(() => ""), arch: a.arch, ops: a.ops, player: a.player, wall: a.wall, stages: rd.stages };
-        if (pagina) {
-          await page.evaluate(DEEP).catch(() => {});
-          let html = await page.evaluate(slimDoc).catch(() => "");
-          // ¿las carátulas no traen enlace? se descubre a qué título lleva cada una
-          const linked = (html.match(/<a\b[^>]*href="[^"]*"[^>]*>(?:(?!<\/a>)[\s\S])*?<img/gi) || []).length;
-          if (linked < 6) { const cards = await discoverCards(page, page.url(), emit); out.cards = cards.length; html = html.replace(/<\/body><\/html>$|<\/html>$/, cardsHtml(cards) + "$&"); }
-          out.html = html.slice(0, 1800000);
-        }
-        emit(out);
+      return;
+    }
+    const pagina = que === "pagina";
+    page.on("popup", (p) => p.close().catch(() => {}));
+    const tap = jsonTap(page);
+    const rd = await render(page, job.url, { scroll: pagina, emit });
+    if (!rd.ok) emit({ type: "spa", ok: false, reason: "SOURCE_ERROR", detail: "la página no abrió", stages: rd.stages });
+    else {
+      const a = await detectSiteArchitecture(page, { url: job.url, code });
+      const out = { type: "spa", ok: true, url: page.url(), title: await page.title().catch(() => ""), arch: a.arch, ops: a.ops, player: a.player, wall: a.wall, stages: rd.stages };
+      if (pagina) {
+        await page.evaluate(DEEP).catch(() => {});
+        let html = await page.evaluate(slimDoc).catch(() => "");
+        const linked = (html.match(/<a\b[^>]*href="[^"]*"[^>]*>(?:(?!<\/a>)[\s\S])*?<img/gi) || []).length;
+        if (linked < 6) { const cards = await discoverCards(ctx, page, page.url(), tap, emit); out.cards = cards.length; html = html.replace(/<\/body><\/html>$|<\/html>$/, cardsHtml(cards) + "$&"); }
+        // página con señal en vivo (Guía de TV): su propio reproductor ya está transmitiendo
+        out.live = await page.evaluate(() => [...document.querySelectorAll("video")].some((v) => !isFinite(v.duration) && v.readyState >= 2)).catch(() => false);
+        out.html = html.slice(0, 450000);
       }
-      emit({ type: "done", status: "done" });
+      tap.stop();
+      emit(out);
+    }
+    emit({ type: "done", status: "done" });
+  } finally { if (!kept) await ctx.close().catch(() => {}); }
+}
+
+// SESIÓN CALIENTE: el mismo Chrome se queda encendido unos minutos y atiende las siguientes tareas al instante
+// (categorías, títulos, pruebas). Se apaga solo tras WARM_MIN sin tareas (o si lo cancelas).
+export const WARM_MIN = 15;
+export async function run(job, { send, launchChrome, isCancel = () => false, maxMs = 340 * 60e3, take = null }) {
+  const START = Date.now();
+  const results = {}, order = [];
+  let chain = Promise.resolve(), lastSend = 0, state = "running";
+  const flush = (status = state) => { state = status; chain = chain.then(() => send({ status: "running", job: { status, warm: !!take, results, events: take ? [] : results["0"]?.events || [] } })); return chain; };
+  let relay = null;
+  const keep = { relay: async (res, ctx, page, emit) => { if (relay) { try { relay.rl.close(); } catch {} relay.ctx.close().catch(() => {}); relay = null; } const rl = await relayFor(res, ctx, page, emit); if (rl) relay = { rl, ctx }; return rl; } };
+  let browser, code = job.code || "";
+  // solo las últimas tareas terminadas quedan a la vista (el espacio es limitado); las que corren nunca se borran
+  const trim = () => { while (order.length > 3) { const k = order.find((x) => results[x]?.status === "done"); if (!k) break; order.splice(order.indexOf(k), 1); delete results[k]; } };
+  const runOne = async (tid, t) => {
+    const ev = []; results[tid] = { status: "running", events: ev, at: Date.now() }; order.push(tid);
+    trim();
+    const emit = (e) => { ev.push(e); if (e.type !== "stage" || Date.now() - lastSend > 1500) { lastSend = Date.now(); flush("running"); } };
+    try { await task(browser, t, code, emit, keep); }
+    catch (e) { emit({ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }); }
+    results[tid].status = "done";
+    await flush(take ? "waiting" : "done");
+  };
+  try {
+    if (!code && process.env.TV_URL) code = await (await fetch(process.env.TV_URL.replace(/\/+$/, "") + "/explorador-dom.js")).text().catch(() => "");
+    browser = await launchChrome({ headless: true, args: ["--autoplay-policy=no-user-gesture-required", "--mute-audio"] });
+    await runOne("0", job);
+    if (take) {
+      const done = new Set(), doneKey = new Map();
+      let last = Date.now(), beat = 0, running = 0;
+      while (!isCancel() && Date.now() - START < maxMs) {
+        const idle = !running && Date.now() - last > WARM_MIN * 60e3 && (!relay || relay.rl.idle() > 30 * 60e3);
+        if (idle) break;
+        const d = await take().catch(() => ({}));
+        if (d?.cancel) break;
+        const t = running < 2 ? (d?.tasks || []).find((x) => !done.has(x.tid)) : null;
+        if (t) {
+          done.add(t.tid);
+          running++;
+          (async () => { try {
+          const key = (t.que || "") + " " + t.url;
+          if (t.que === "pagina" && doneKey.has(key) && Date.now() - doneKey.get(key).at < 10 * 60e3) { // ya se hizo: se repite el resultado
+            results[t.tid] = { status: "done", events: doneKey.get(key).events, at: Date.now() }; order.push(t.tid); trim();
+            await flush("waiting");
+          } else {
+            await runOne(t.tid, t);
+            if (t.que === "pagina") doneKey.set(key, { at: Date.now(), events: results[t.tid]?.events || [] });
+          }
+          last = Date.now();
+          } finally { running--; last = Date.now(); } })();
+        } else if (Date.now() - beat > 10000) { beat = Date.now(); await flush("waiting"); }
+        await sleep(t ? 50 : 1200);
+      }
     }
   } catch (e) {
-    emit({ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) });
+    if (!results["0"]) results["0"] = { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] };
   } finally {
-    await flush("done");
-    if (relay) { // sigue encendido mientras lo ves; se apaga solo tras 30 min sin pedidos (o si lo cancelas)
-      for (;;) { await sleep(30000); await flush("done"); if (isCancel() || relay.idle() > 30 * 60e3 || Date.now() - START > maxMs) break; }
-      relay.close();
+    state = "done"; await flush("done");
+    if (relay && !take) { // sin sesión caliente: igual que antes, el relevo sigue mientras lo ves
+      for (;;) { await sleep(30000); await flush("done"); if (isCancel() || relay.rl.idle() > 30 * 60e3 || Date.now() - START > maxMs) break; }
     }
+    try { relay?.rl.close(); } catch {}
     await browser?.close().catch(() => {});
   }
 }
