@@ -646,7 +646,7 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
           last = Date.now();
           } finally { running--; if (t.pre) runningPre--; last = Date.now(); } })();
         } else if (Date.now() - beat > 10000) { beat = Date.now(); await flush("waiting"); }
-        await sleep(t ? 50 : 1200);
+        await sleep(t ? 50 : 3000); // sin tareas: se consulta cada 3 s (antes 1,2 s) para gastar menos del cupo diario de Cloudflare
       }
     }
   } catch (e) {
