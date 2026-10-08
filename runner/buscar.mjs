@@ -17,16 +17,12 @@ else if (PAGE) {
 // en un repositorio público nada de esto se imprime: sin direcciones, nombres ni claves en los registros
 console.log = () => {}; console.error = () => {};
 const MAX_MIN = +(process.env.MAX_MIN || 340); // GitHub deja hasta 6 horas por búsqueda
-// si algo se cae sin aviso, tu página se entera (antes quedaba «buscando…» para siempre)
-let dying = false;
-const die = async (e) => { if (dying) return; dying = true; try { await send({ status: "error", step: "el Chrome de GitHub se detuvo: " + String(e?.message || e).slice(0, 120), job: { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] } }); } catch {} process.exit(1); };
-process.on("unhandledRejection", die); process.on("uncaughtException", die);
 
 let cancel = false;
 const send = async (data) => {
   if (!PAGE) return;
   try {
-    const r = await fetch(`${PAGE}/gh/avance?${new URLSearchParams({ id: ID, t: T })}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data), signal: AbortSignal.timeout(15000) });
+    const r = await fetch(`${PAGE}/gh/avance?${new URLSearchParams({ id: ID, t: T })}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
     const d = await r.json().catch(() => ({}));
     if (d.cancel) cancel = true;
   } catch {}
@@ -66,7 +62,7 @@ async function relayFor(r, ctx, page, UA, emit) {
 // Solo responde la arquitectura (MULTI_SOURCE / DIRECT_PLAYER / PLAYER_PENDING) o la página ya armada. No toca los demás modos.
 if (job.mode === "spa") {
   try { const { run } = await import("./spa.mjs"); await run(job, { send, launchChrome, isCancel: () => cancel, maxMs: MAX_MIN * 60e3,
-    take: job.warm && PAGE ? async () => { try { return await (await fetch(`${PAGE}/gh/tomar?${new URLSearchParams({ id: ID, t: T })}`, { signal: AbortSignal.timeout(10000) })).json(); } catch { return {}; } } : null }); }
+    take: job.warm && PAGE ? async () => { try { return await (await fetch(`${PAGE}/gh/tomar?${new URLSearchParams({ id: ID, t: T })}`)).json(); } catch { return {}; } } : null }); }
   catch (e) { await send({ status: "done", job: { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] } }); }
   process.exit(0);
 }
@@ -137,7 +133,7 @@ if (job.mode === "fuente") {
   const step = async (t) => { out.step = t; await send({ status: "running", job: out }); };
   const autoplay = async (pg) => { for (const f of pg.frames()) await f.evaluate(() => {
     for (const v of document.querySelectorAll("video")) { v.muted = true; v.play().catch(() => {}); }
-    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i], button[class*=gate__ i]");
+    const b = document.querySelector(".vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .fp-play, .play-button, button[aria-label*='play' i], button[title*='play' i], button[aria-label*='reproducir' i], [class*=captcha i] button, button[class*=gate__ i]");
     if (b && [...document.querySelectorAll("video")].every((v) => v.paused)) b.click();
   }).catch(() => {}); };
   const domVideos = async (pg, src) => { for (const f of pg.frames()) { const vs = await f.evaluate(() => [...document.querySelectorAll("video, video source, source")].map((v) => v.currentSrc || v.src).filter(Boolean)).catch(() => []); for (const v of vs) add(v, pg.url(), pg.url(), src); } };
