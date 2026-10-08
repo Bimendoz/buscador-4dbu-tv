@@ -603,19 +603,23 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
   const START = Date.now();
   const results = {}, order = [];
   let chain = Promise.resolve(), lastSend = 0, state = "running";
-  const flush = (status = state) => { state = status; chain = chain.then(() => send({ status: "running", job: { status, warm: !!take, results, events: take ? [] : results["0"]?.events || [] } })); return chain; };
+  let closed = false;
+  // el almacén guarda hasta 2 MB: si el paquete se pasa, a lo más viejo ya terminado se le quita la página armada
+  const fit = () => { let n = JSON.stringify(results).length; for (const k of order) { if (n < 1.5e6) break; const r = results[k]; if (r?.status !== "done") continue; for (const e of r.events || []) if (e.html) { n -= e.html.length; e.html = ""; e.htmlCut = true; } } };
+  const flush = (status = state) => { if (closed && status !== "done") return chain; state = status; fit(); chain = chain.then(() => send({ status: "running", job: { status, warm: !!take, results, events: take ? [] : results["0"]?.events || [] } })); return chain; }; // tras «done» nada lo vuelve a «running»
   let relay = null;
   const keep = { relay: async (res, ctx, page, emit) => { if (relay) { try { relay.rl.close(); } catch {} relay.ctx.close().catch(() => {}); relay = null; } const rl = await relayFor(res, ctx, page, emit); if (rl) relay = { rl, ctx }; return rl; } };
   let browser, code = job.code || "";
   // solo las últimas tareas terminadas quedan a la vista (el espacio es limitado); las que corren nunca se borran
-  const trim = () => { while (order.length > 3) { const k = order.find((x) => results[x]?.status === "done"); if (!k) break; order.splice(order.indexOf(k), 1); delete results[k]; } };
+  // se borran los terminados hace más de 3 min (tu página ya los leyó) o, si son muchos, los más viejos
+  const trim = () => { for (;;) { const k = order.find((x) => results[x]?.status === "done" && (order.length > 8 || Date.now() - (results[x].end || results[x].at) > 3 * 60e3)); if (!k) break; order.splice(order.indexOf(k), 1); delete results[k]; } };
   const runOne = async (tid, t) => {
     const ev = []; results[tid] = { status: "running", events: ev, at: Date.now() }; order.push(tid);
     trim();
     const emit = (e) => { ev.push(e); if (e.type !== "stage" || Date.now() - lastSend > 1500) { lastSend = Date.now(); flush("running"); } };
     try { await task(browser, t, code, emit, keep); }
     catch (e) { emit({ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }); }
-    results[tid].status = "done";
+    results[tid].status = "done"; results[tid].end = Date.now();
     await flush(take ? "waiting" : "done");
   };
   try {
@@ -652,7 +656,7 @@ export async function run(job, { send, launchChrome, isCancel = () => false, max
   } catch (e) {
     if (!results["0"]) results["0"] = { status: "done", events: [{ type: "done", status: "browser_error", reason: "BROWSER_UNAVAILABLE", detail: String(e?.message || e).slice(0, 160) }] };
   } finally {
-    state = "done"; await flush("done");
+    state = "done"; closed = true; await flush("done");
     if (relay && !take) { // sin sesión caliente: igual que antes, el relevo sigue mientras lo ves
       for (;;) { await sleep(30000); await flush("done"); if (isCancel() || relay.rl.idle() > 30 * 60e3 || Date.now() - START > maxMs) break; }
     }
