@@ -146,7 +146,7 @@ export async function runSourceWithTimeout(task, timeout, budget = null) {
 }
 // selectores de botón Play (los tuyos) + cualquier botón que diga play/reproducir
 // primero los porteros («Reproducir vídeo» de Filemoon/Byse): si están a la vista, ese es el Play que hay que tocar
-const PLAY_SELECTORS = ['[class*="captcha" i] button', 'button[class*="gate__" i]', 'button[aria-label*="reproducir" i]', 'button[aria-label*="Play" i]', 'button[title*="Play" i]', '[aria-label*="Play" i]', '[title*="Play" i]', ".play", ".play-button", ".vjs-play-control", ".vjs-big-play-button",
+const PLAY_SELECTORS = ['button[class*="gate__" i]', 'button[aria-label*="reproducir" i]', 'button[aria-label*="Play" i]', 'button[title*="Play" i]', '[aria-label*="Play" i]', '[title*="Play" i]', ".play", ".play-button", ".vjs-play-control", ".vjs-big-play-button",
   '[aria-label*="reproducir" i]', 'button[title*="reproducir" i]', 'button[class*="play" i]',
   ".jw-icon-playback", ".jw-display-icon-container", '.plyr__control[data-plyr="play"]', '[class*="play-button" i]', '[class*="play_button" i]', '[class*="playButton" i]'];
 
