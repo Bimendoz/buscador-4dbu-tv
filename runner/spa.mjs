@@ -535,10 +535,20 @@ async function task(browser, job, code, emit, keep) {
     await ctx.route("**/*", (r) => { let h = ""; try { h = new URL(r.request().url()).hostname; } catch {} const t = r.request().resourceType();
       const ad = AD.test(h) && !(que === "directo" && /(^|\.)imasdk\.googleapis\.com$/i.test(h));
       if (ad) blocked.add(h);
-      return ad || t === "font" || (que === "directo" && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
+      return ad || t === "font" || ((que === "directo" || que === "fuentes") && t === "image") ? r.abort().catch(() => {}) : r.continue().catch(() => {}); });
     if (que === "directo") await ctx.addInitScript(DRM_HOOK);
     const page = await ctx.newPage();
     emit({ type: "preflight", ok: true });
+    // solo encender (se pide al abrir la ficha de un título: cuando le des play, el navegador ya está listo)
+    if (que === "ping") { emit({ type: "done", status: "done" }); return; }
+    // la prueba de SIEMPRE (fuentes en orden con explorar.js), pero en este Chrome que ya está encendido
+    if (que === "fuentes") {
+      const { probarTitulo } = await import("./explorar.js");
+      const r = await probarTitulo(page, { url: job.url, sources: job.sources || [], code, totalMs: job.ms || 10000, emit });
+      if (job.relay && r.status === "working") { const w = (r.results || []).find((x) => x.status === "working"); if (w) { const rl = await keep.relay(w, ctx, page, emit); if (rl) kept = true; } }
+      emit({ type: "done", ...r, results: undefined });
+      return;
+    }
     if (que === "directo") {
       const res = await directTest(page, ctx, job, code, emit);
       emit({ ...res, type: "result", sourceType: res.type });
