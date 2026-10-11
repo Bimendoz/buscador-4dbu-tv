@@ -158,6 +158,9 @@ async function webResults(query, siteDomain = "", max = 3) {
       if (found.length === before) break; // esa página no trajo nada nuevo: el buscador se acabó
     }
   };
+  // Brave Search sin clave (su página de resultados): página tras página, muchos más sitios que DuckDuckGo
+  if (found.length < max) await pages((n) => `https://search.brave.com/search?q=${q}&offset=${n}&source=web`,
+    /<a[^>]+href="(https?:\/\/[^"]+)"/g, (m) => { const u = m[1].replace(/&amp;/g, "&"); if (/^https?:\/\/([a-z0-9-]+\.)*(brave\.com|bravesoftware\.com)(\/|$)/i.test(u)) throw 0; return u; });
   if (found.length < max) await pages((n) => n ? `https://html.duckduckgo.com/html/?s=${n * 30}&dc=${n * 30 + 1}&q=` + q : "https://html.duckduckgo.com/html/?q=" + q,
     /uddg=([^&"']+)/g, (m) => decodeURIComponent(m[1]));
   if (found.length < max) await pages((n) => `https://www.bing.com/search?setlang=es&count=50&first=${n * 50 + 1}&q=` + q,
