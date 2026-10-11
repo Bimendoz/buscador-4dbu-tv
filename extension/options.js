@@ -301,7 +301,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setStatus("tvStatus", "Probando…");
     try {
       const r = await fetch(`${u}/entrada?k=${encodeURIComponent(k)}`, { cache: "no-store" });
-      setStatus("tvStatus", r.ok ? "✓ Conectado: ya puedes enviar desde el popup." : r.status === 401 ? "✗ La clave del puente no es la de tu +4dBu TV." : r.status === 404 ? "✗ Tu +4dBu TV aún no tiene esta función: publícalo de nuevo con PUBLICAR.bat." : `✗ Respondió ${r.status}`, r.ok ? "ok" : "err");
+      setStatus("tvStatus", r.ok ? "✓ Conectado: ya puedes enviar desde el popup." : r.status === 401 ? "✗ La clave del puente no es la de tu NOVA." : r.status === 404 ? "✗ Tu NOVA aún no tiene esta función: publícalo de nuevo con PUBLICAR.bat." : `✗ Respondió ${r.status}`, r.ok ? "ok" : "err");
     } catch (e) { setStatus("tvStatus", "✗ No respondió: revisa la dirección.", "err"); }
   };
   $("btnSyncNow").onclick = async () => { setStatus("syncStatus", "Sincronizando…"); await chrome.runtime.sendMessage({ action: "syncNow" }).catch(() => {}); };
