@@ -877,22 +877,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   $("btnCopyAll").onclick = (e) => copy(m3uFile(tabEntries(), state.settings), e.currentTarget);
   $("btnExport").onclick = () => download(m3uFile(tabEntries(), state.settings), safeFile(cleanTitle(state.tabTitle) || "hls_lista") + ".m3u");
-  // enviar a +4dBu TV: la lista va a tu página (Cloudflare) y tu +4dBu TV la agrega a tus favoritos solo
-  // la página de donde salió cada link: +4dBu TV la usa para sacar un link nuevo cuando el viejo vence (link vivo)
+  // enviar a NOVA: la lista va a tu página (Cloudflare) y tu NOVA la agrega a tus favoritos solo
+  // la página de donde salió cada link: NOVA la usa para sacar un link nuevo cuando el viejo vence (link vivo)
   const pagesOf = (items) => { const o = {}; for (const it of items) { const pg = it.pageUrl || ""; if (!/^https?:/i.test(pg)) continue; for (const u of [it.url, effUrl(it)]) if (u) o[u] = pg; } return o; };
   const openTvSend = (getEntries, what, getItems = () => []) => {
     const box = $("tvSend"), s = state.settings || {};
     if (!box.hidden && box.dataset.what === what) { box.hidden = true; return; }
     box.dataset.what = what;
-    const head = el("div", { className: "tvh" }, icon("cast", 14), el("span", { textContent: "Enviar a +4dBu TV" }));
+    const head = el("div", { className: "tvh" }, icon("cast", 14), el("span", { textContent: "Enviar a NOVA" }));
     if (!s.tvUrl || !s.tvKey) {
-      box.replaceChildren(head, el("div", { className: "tvst", textContent: "Falta conectar tu +4dBu TV: Más opciones → «+4dBu TV» (dirección y clave del puente)." }),
+      box.replaceChildren(head, el("div", { className: "tvst", textContent: "Falta conectar tu NOVA: Más opciones → «NOVA» (dirección y clave del puente)." }),
         el("div", { className: "row" }, btn(["settings", "Abrir Más opciones"], () => chrome.runtime.openOptionsPage(), "b primary"), btn("Cerrar", () => { box.hidden = true; })));
       box.hidden = false; return;
     }
     const n = getEntries().length;
     const dl = el("datalist", { id: "tvCats" }); for (const c of state.categories || []) dl.append(el("option", { value: c }));
-    const inp = el("input", { type: "text", placeholder: "Categoría en +4dBu TV (vacío = la que ya tenga cada uno)", value: s.tvLastGroup || "" }); inp.setAttribute("list", "tvCats");
+    const inp = el("input", { type: "text", placeholder: "Categoría en NOVA (vacío = la que ya tenga cada uno)", value: s.tvLastGroup || "" }); inp.setAttribute("list", "tvCats");
     const st = el("div", { className: "tvst", textContent: n ? `${n} elemento(s) de ${what}.` : "No hay nada para enviar." });
     const go = btn(["cast", `Enviar ${n}`], async () => {
       const entries = getEntries(); if (!entries.length) return;
@@ -901,8 +901,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const r = await fetch(`${s.tvUrl.trim().replace(/\/+$/, "")}/entrada?k=${encodeURIComponent(s.tvKey.trim())}`, { method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ m3u: m3uFile(entries, s), pages: pagesOf(getItems()), group: inp.value.trim(), from: state.view === "tab" ? (state.tabTitle || "") : "Guardados de la extensión" }) });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(r.status === 401 ? "la clave del puente no coincide" : r.status === 404 ? "publica tu +4dBu TV de nuevo (PUBLICAR.bat)" : d.error || "respondió " + r.status);
-        st.className = "tvst ok"; st.textContent = `✓ Enviado (${entries.length}). Aparece en tu +4dBu TV en menos de un minuto.`;
+        if (!r.ok) throw new Error(r.status === 401 ? "la clave del puente no coincide" : r.status === 404 ? "publica tu NOVA de nuevo (PUBLICAR.bat)" : d.error || "respondió " + r.status);
+        st.className = "tvst ok"; st.textContent = `✓ Enviado (${entries.length}). Aparece en tu NOVA en menos de un minuto.`;
         const { settings: cur = {} } = await chrome.storage.local.get("settings");
         await chrome.storage.local.set({ settings: { ...cur, tvLastGroup: inp.value.trim() } });
       } catch (e) { st.className = "tvst err"; st.textContent = "✗ No se pudo: " + (e.message || e); }
