@@ -6,7 +6,7 @@ los analiza, los monitorea y los reúne en un solo link de lista M3U para VLC o 
 ## Instalar
 1. `chrome://extensions` → activa **Modo desarrollador**.
 2. **Quita las versiones anteriores** para que no detecten dos veces.
-3. **Cargar descomprimida** → selecciona esta carpeta `version 3`.
+3. **Cargar descomprimida** → selecciona esta carpeta `EXTENSION` (dentro de APP OFICIAL).
 
 ## Novedades de la versión 3
 - **Videos de la página**: si una página tiene un video (.mp4, .webm, .mov…) en su reproductor, aparece como
