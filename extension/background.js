@@ -405,4 +405,6 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!cur.allLinksV1) m = { ...cur, searchCount: 0, allLinksV1: true };
   if (m) await chrome.storage.local.set({ settings: m }); // cambia el formato -> la lista publicada se republica sola
 });
-chrome.runtime.onStartup.addListener(() => { scheduleHealth(); scheduleRelay(); });
+chrome.runtime.onStartup.addListener(() => { scheduleHealth(); scheduleRelay(); ensureNova(); });
+// tu NOVA queda conectada sola (sin escribir dirección ni clave)
+chrome.runtime.onInstalled.addListener(() => { setTimeout(() => ensureNova(), 3000); });
