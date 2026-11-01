@@ -25,6 +25,11 @@
     .brand .tally { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); }
     .brand b { color: var(--text); font-weight: 700; }
     .brand .ver { margin-left: auto; color: var(--dim); letter-spacing: .06em; }
+    .brand .brandbtn { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border: 1px solid var(--line2); border-radius: 4px;
+      background: var(--panel); color: var(--text); font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+    .brand .brandbtn:hover { border-color: var(--accent); color: #fff; }
+    .brand .brandbtn + .ver { margin-left: 0; }
+    .brand > * { white-space: nowrap; }
 
     header { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
     .tabs { display: flex; flex: 1; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
@@ -212,7 +217,7 @@
   </style>
 </head>
 <body>
-  <div class="brand"><span class="tally"></span><b>HLS Stream Detector</b><span>· +4dBu</span><span class="ver" id="ver"></span></div>
+  <div class="brand"><span class="tally"></span><b>HLS Stream Detector</b><span>· +4dBu</span><button id="tabExplore" class="brandbtn" title="Explorar un sitio: categorías y títulos → lista M3U o NOVA" data-icon="globe" data-icon-size="12">Explorar</button><span class="ver" id="ver"></span></div>
   <header>
     <div class="tabs">
       <button id="tabThis" class="on" data-icon="monitor">Pestaña<span class="n" id="countThis">0</span></button>
