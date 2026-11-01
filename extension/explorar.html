@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explorar un sitio · HLS Stream Detector</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #12151a; --panel2: #181c22; --raise: #1f242c; --line: #242a33; --line2: #2f3640;
+    --text: #e6e8eb; --muted: #8a919c; --dim: #5d6470;
+    --red: #ff3b30; --green: #2fd158; --amber: #ffb020; --blue: #3d8bfd; --cyan: #2ec5d3;
+    --accent: var(--blue);
+    --mono: "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
+    --gap: 12px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; padding-bottom: 96px; }
+  svg.ic { flex: 0 0 auto; }
+  ::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 5px; } ::-webkit-scrollbar-track { background: transparent; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: #07080a; border-bottom: 1px solid var(--line);
+    font: 600 11px/1 var(--mono); letter-spacing: .14em; color: var(--muted); text-transform: uppercase; }
+  .brand .tally { width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .brand b { color: var(--text); }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: var(--gap); }
+  h1 { font-size: 20px; margin: 4px 0 0; }
+  .lead { color: var(--muted); margin: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: var(--gap); }
+  [hidden] { display: none !important; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .grow { flex: 1; min-width: 0; }
+  .lbl { font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  input[type=text], input[type=url], select { font: inherit; height: 38px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 6px; background: var(--bg); color: var(--text); outline: none; }
+  input[type=text]:focus, input[type=url]:focus, select:focus { border-color: var(--accent); }
+  input[type=url] { flex: 1; min-width: 240px; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 38px; padding: 0 14px; font: 600 13px "Segoe UI", system-ui, sans-serif;
+    cursor: pointer; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); color: var(--text); white-space: nowrap; }
+  button:hover:not(:disabled) { background: var(--raise); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--accent); }
+  button.ok { background: var(--green); border-color: var(--green); color: #04150a; }
+  button.danger { color: var(--red); }
+  button.small { height: 30px; padding: 0 10px; font-size: 12px; }
+  .note { color: var(--muted); font-size: 12px; margin: 0; }
+  .note b { color: var(--text); }
+  .msg { font-size: 12.5px; margin: 0; } .msg:empty { display: none; }
+  .msg.bad { color: var(--red); } .msg.ok { color: var(--green); } .msg.warn { color: var(--amber); }
+  /* categorías */
+  .cats { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cat { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 17px; background: var(--panel2); cursor: pointer; user-select: none; }
+  .cat input { margin: 0; accent-color: var(--accent); }
+  .cat.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
+  .cat small { color: var(--muted); font: 600 11px var(--mono); }
+  .group-lbl { width: 100%; margin-top: 4px; }
+  /* títulos */
+  .sec { display: flex; flex-direction: column; gap: 10px; }
+  .sec + .sec { border-top: 1px solid var(--line); padding-top: var(--gap); }
+  .sec-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sec-h h2 { font-size: 15px; margin: 0; }
+  .sec-h .n { color: var(--muted); font: 600 12px var(--mono); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+  .t { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); cursor: pointer; min-width: 0; }
+  .t.off { opacity: .4; }
+  .t .ph { aspect-ratio: 2/3; border-radius: 5px; background: var(--raise) center/contain no-repeat; display: grid; place-items: center; color: var(--dim); overflow: hidden; }
+  .t .ph img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .t b { font-size: 12px; line-height: 1.3; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .t small { color: var(--muted); font: 11px var(--mono); }
+  .t input { position: absolute; top: 10px; left: 10px; margin: 0; width: 16px; height: 16px; accent-color: var(--accent); }
+  .t .st { position: absolute; top: 8px; right: 8px; font: 700 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 4px 6px; border-radius: 4px; background: #000c; }
+  .st.busy { color: var(--amber); } .st.ok { color: var(--green); } .st.bad { color: var(--red); } .st.wait { color: var(--muted); }
+  .empty { color: var(--muted); padding: 20px; text-align: center; }
+  /* barra de acciones */
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: #07080aee; border-top: 1px solid var(--line); backdrop-filter: blur(8px); }
+  .bar-in { max-width: 1180px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .bar .sum { flex: 1; min-width: 200px; color: var(--muted); font-size: 12px; }
+  .bar .sum b { color: var(--text); }
+  .prog { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .prog i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line2); border-radius: 10px; padding: 18px; width: min(520px, 92vw); }
+  dialog::backdrop { background: #000a; }
+  dialog h3 { margin: 0 0 12px; font-size: 16px; }
+  dialog .acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+  dialog label { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; cursor: pointer; }
+  dialog label small { display: block; color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="brand"><span class="tally"></span><b>HLS Stream Detector</b><span>· Explorar un sitio</span></div>
+  <main>
+    <h1>Explorar un sitio</h1>
+    <p class="lead">Lee las categorías de un sitio y sus títulos, como el Detector de NOVA, pero desde tu Chrome: con tu internet y con tu sesión si el sitio pide iniciar sesión. Después armas tu lista M3U por categorías o lo envías a NOVA.</p>
+
+    <section class="card" id="cSite">
+      <div class="row">
+        <input type="url" id="site" placeholder="Sitio a explorar (p. ej. https://misitio.com)" spellcheck="false" autocomplete="off">
+        <button class="primary" id="open" data-icon="globe">Abrir sitio</button>
+      </div>
+      <p class="msg" id="siteMsg"></p>
+      <div class="row" id="sesRow" hidden>
+        <span class="note grow" id="sesNote"></span>
+        <button class="small" id="sesSend" data-icon="lock">Enviar mi sesión a NOVA</button>
+      </div>
+    </section>
+
+    <section class="card" id="cCats" hidden>
+      <div class="row">
+        <span class="lbl grow" id="catsLbl">Categorías</span>
+        <button class="small" id="catsAll">Todas</button>
+        <button class="small" id="catsNone">Ninguna</button>
+      </div>
+      <div class="cats" id="cats"></div>
+      <div class="row">
+        <label class="note" for="pages">Páginas por categoría</label>
+        <select id="pages">
+          <option value="1">1 página</option><option value="2">2 páginas</option><option value="3" selected>3 páginas</option>
+          <option value="5">5 páginas</option><option value="10">10 páginas</option><option value="0">Todas</option>
+        </select>
+        <span class="grow"></span>
+        <button class="primary" id="read" data-icon="list">Leer títulos</button>
+      </div>
+      <p class="msg" id="readMsg"></p>
+    </section>
+
+    <section class="card" id="cTitles" hidden>
+      <div class="row">
+        <span class="lbl grow" id="titlesLbl">Títulos</span>
+        <input type="text" id="filter" placeholder="Filtrar por nombre" style="width:240px">
+      </div>
+      <div id="secs"></div>
+    </section>
+  </main>
+
+  <div class="bar" id="bar" hidden>
+    <div class="prog" id="prog" hidden><i></i></div>
+    <div class="bar-in">
+      <span class="sum" id="sum"></span>
+      <button id="toNova" data-icon="cast" title="Manda el sitio con sus categorías y títulos al catálogo de NOVA: NOVA saca el link al darle play">Enviar a NOVA</button>
+      <button id="capture" class="primary" data-icon="play" title="Abre cada título en una pestaña de fondo, captura su video y lo guarda en Guardados con su categoría">Sacar links</button>
+      <button id="stop" class="danger" data-icon="x" hidden>Detener</button>
+      <button id="m3u" data-icon="download" disabled title="Descarga la lista con los links sacados, agrupada por categoría">Descargar .m3u</button>
+    </div>
+  </div>
+
+  <dialog id="dlg"></dialog>
+
+  <script src="lib/common.js"></script>
+  <script src="lib/icons.js"></script>
+  <script src="lib/x4.js"></script>
+  <script src="explorar.js"></script>
+</body>
+</html>
