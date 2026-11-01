@@ -866,6 +866,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("tabThis").onclick = () => setView("tab");
   $("tabSaved").onclick = () => setView("saved");
   $("tabSearch").onclick = () => setView("search");
+  // Explorar un sitio (como el Detector de NOVA): se abre en una pestaña con el sitio que estás viendo
+  $("tabExplore").onclick = async () => {
+    let u = ""; try { const [t] = await chrome.tabs.query({ active: true, currentWindow: true }); if (/^https?:/i.test(t?.url || "")) u = new URL(t.url).origin + "/"; } catch {}
+    chrome.tabs.create({ url: chrome.runtime.getURL("explorar.html") + (u ? "?u=" + encodeURIComponent(u) : "") }); window.close();
+  };
 
   // pie: esta pestaña
   const tabEntries = () => {
@@ -909,7 +914,24 @@ document.addEventListener("DOMContentLoaded", async () => {
       go.disabled = false;
     }, "b primary");
     go.disabled = !n;
-    box.replaceChildren(head, dl, inp, el("div", { className: "row" }, go, btn("Cerrar", () => { box.hidden = true; })), st);
+    // sesión del sitio de esta pestaña: NOVA entra como tú (para páginas con inicio de sesión)
+    const ses = what === "esta pestaña" ? btn(["lock", "Enviar mi sesión de este sitio"], async () => {
+      ses.disabled = true; st.className = "tvst"; st.textContent = "Enviando tu sesión…";
+      try {
+        const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!/^https?:/i.test(t?.url || "")) throw new Error("abre primero el sitio en esta pestaña");
+        const h = new URL(t.url).hostname.replace(/^www\./, ""), p = h.split("."), dom = p.length > 2 && /^(com|net|org|co|gob|edu)$/.test(p[p.length - 2]) && p[p.length - 1].length === 2 ? p.slice(-3).join(".") : p.slice(-2).join(".");
+        const cs = await chrome.cookies.getAll({ domain: dom });
+        if (!cs.length) throw new Error("este sitio no tiene sesión guardada en tu Chrome");
+        const r = await fetch(`${s.tvUrl.trim().replace(/\/+$/, "")}/sesion?k=${encodeURIComponent(s.tvKey.trim())}`, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ site: t.url, url: t.url, via: "extension", ua: navigator.userAgent, cookies: cs.map((c) => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly, hostOnly: c.hostOnly, expirationDate: c.expirationDate })) }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(r.status === 401 ? "la clave del puente no coincide" : r.status === 404 ? "publica tu NOVA de nuevo (PUBLICAR.bat)" : d.error || "respondió " + r.status);
+        st.className = "tvst ok"; st.textContent = `✓ Sesión de ${d.site} enviada. El Detector de NOVA ya entra como tú.`;
+      } catch (e) { st.className = "tvst err"; st.textContent = "✗ No se pudo: " + (e.message || e); }
+      ses.disabled = false;
+    }, "b") : null;
+    box.replaceChildren(head, dl, inp, el("div", { className: "row" }, go, ses, btn("Cerrar", () => { box.hidden = true; })), st);
     box.hidden = false; inp.focus();
   };
   $("btnTvSend").onclick = () => openTvSend(tabEntries, "esta pestaña", () => tabList().list);
