@@ -31,7 +31,7 @@ const baseDom = (h) => { h = String(h || "").toLowerCase().replace(/^www\./, "")
 const siteDom = () => { try { return baseDom(new URL(ST.site).hostname); } catch { return ""; } };
 const msg = (id, t, cls = "") => { const n = $(id); n.className = "msg " + cls; n.textContent = t || ""; };
 const getSettings = async () => ({ ...DEFAULT_SETTINGS, ...((await chrome.storage.local.get("settings")).settings || {}) });
-const nova = async () => { const s = await getSettings(); const u = (s.tvUrl || "").trim().replace(/\/+$/, ""), k = (s.tvKey || "").trim(); return u && k ? { u, k } : null; };
+const nova = async () => ensureNova(); // se conecta sola a tu NOVA (dirección conocida + clave de su config.js)
 
 // ---------------------------------------------------------------- leer páginas (con tu sesión)
 async function waitLoad(tabId, ms = 20000) {
@@ -295,6 +295,7 @@ async function sessionRow() {
 async function postEntrada(N, body) {
   const r = await fetch(`${N.u}/entrada?k=${encodeURIComponent(N.k)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && !N.retry) { const n2 = await ensureNova(true); if (n2) return postEntrada({ ...n2, retry: true }, body); } // cambiaste la clave al publicar: se relee sola
   if (!r.ok) throw new Error(r.status === 401 ? "la clave del puente no coincide" : r.status === 404 ? "publica tu NOVA de nuevo (PUBLICAR.bat)" : r.status === 400 && body.catalog ? "publica tu NOVA de nuevo (PUBLICAR.bat) para recibir catálogos" : j.error || "respondió " + r.status);
   return j;
 }
