@@ -890,8 +890,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!box.hidden && box.dataset.what === what) { box.hidden = true; return; }
     box.dataset.what = what;
     const head = el("div", { className: "tvh" }, icon("cast", 14), el("span", { textContent: "Enviar a NOVA" }));
-    if (!s.tvUrl || !s.tvKey) {
-      box.replaceChildren(head, el("div", { className: "tvst", textContent: "Falta conectar tu NOVA: Más opciones → «NOVA» (dirección y clave del puente)." }),
+    if (!s.tvUrl || !s.tvKey) { // se conecta sola a tu NOVA (lee su clave) y vuelve a abrir este cuadro
+      if (!box.dataset.auto) { box.dataset.auto = "1"; ensureNova().then((n) => { if (n) { state.settings = { ...(state.settings || {}), tvUrl: n.u, tvKey: n.k }; box.hidden = true; box.dataset.what = ""; openTvSend(getEntries, what, getItems); } }); }
+      box.replaceChildren(head, el("div", { className: "tvst", textContent: "Conectando con tu NOVA… si no conecta, revisa tu internet o Más opciones → «NOVA»." }),
         el("div", { className: "row" }, btn(["settings", "Abrir Más opciones"], () => chrome.runtime.openOptionsPage(), "b primary"), btn("Cerrar", () => { box.hidden = true; })));
       box.hidden = false; return;
     }
