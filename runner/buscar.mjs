@@ -1,5 +1,5 @@
 // +4dBu TV · Buscador en GitHub
-// Abre un Chrome con TU extensión (la carpeta «extension», copia exacta de «version 3», sin tocarle nada)
+// Abre un Chrome con TU extensión (la carpeta «extension», copia exacta de «EXTENSION», sin tocarle nada)
 // y corre su propio buscador (runSearch). Va contando el avance a tu página para que lo veas en vivo.
 import { chromium } from "playwright";
 import path from "node:path";
