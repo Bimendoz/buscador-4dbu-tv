@@ -24,6 +24,22 @@ const DEFAULT_SETTINGS = {
   countries: [],      // países de la búsqueda y del escaneo: [] = todos · "LATAM" · "MX", "CO"… (ver lib/lang.js)  // idioma de la búsqueda y del escaneo: latam | spa | es | any (ver lib/lang.js)    // cuántos links prueba cada búsqueda, en orden (directorio → sitio oficial → web). Sin tope.
   braveKey: ""        // clave de Brave Search API (buscador principal); sin clave se usa DuckDuckGo/Bing
 };
+// TU NOVA: se conecta sola. La dirección es la de tu NOVA publicada y la clave del puente se lee de su config.js
+// (la misma que usa tu página). Si cambias la clave al publicar, se vuelve a leer sola.
+const NOVA_URL = "https://mas4dbu-tv.brianarpista.workers.dev";
+async function ensureNova(force = false) {
+  try {
+    const { settings = {} } = await chrome.storage.local.get("settings");
+    if (!force && settings.tvUrl && settings.tvKey) return { u: settings.tvUrl.trim().replace(/\/+$/, ""), k: settings.tvKey.trim() };
+    const u = (settings.tvUrl || NOVA_URL).trim().replace(/\/+$/, "");
+    const r = await fetch(u + "/config.js", { cache: "no-store" });
+    const k = ((await r.text()).match(/bridgeKey\s*:\s*['"]([^'"]+)['"]/) || [])[1] || "";
+    if (!k) return null;
+    const { settings: cur = {} } = await chrome.storage.local.get("settings");
+    await chrome.storage.local.set({ settings: { ...cur, tvUrl: u, tvKey: k } });
+    return { u, k };
+  } catch { return null; }
+}
 // «Links a probar»: 0 = todos
 const searchCountOf = (v) => (v === "" || v == null || !Number.isFinite(+v) ? 0 : Math.max(0, Math.round(+v))); // 0 = todos
 // car = { ok, verdict, why, at }: resultado de la última prueba «como CarTV» (ok/referer = apto)
