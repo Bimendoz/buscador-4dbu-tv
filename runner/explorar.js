@@ -492,6 +492,56 @@ export async function probarFuente(page, { url, i = 0, nm = "", ms = LIMITS.sour
   }
 }
 
+
+// ============================================================
+// EXTRACTOR POR HTTP: sigue la cadena de iframes con peticiones HTTP puras (sin navegador).
+// Sitios tipo misitio.com: botón data-src → core.php (iframe) → stream.php (iframe) → .m3u8 (el video).
+// Funciona aunque el servidor de streaming bloquee IPs de la nube, porque solo lee las páginas HTML para
+// sacar la URL del .m3u8; el video lo reproduce TU equipo. Se prueba ANTES del navegador: si encuentra
+// el .m3u8, no se gasta cuota de navegador.
+// ============================================================
+const SKIP_IFRAME = /sharethis|facebook\.com|google\.com\/|twitter|analytics|chat(?:[\/\.?])|doubleclick|adsense|adservice/i;
+const M3U8_IN_HTML = /https?:\/\/[^\s"'<>`\\]+\.(?:m3u8|mpd)(?:\?[^\s"'<>`\\]*)?/gi;
+export async function extraerPorHttp(startUrl, { ua = UA_DEFAULT, timeout = 5000, maxDepth = 4 } = {}) {
+  const visited = new Set();
+  async function follow(u, ref, depth) {
+    if (depth > maxDepth || visited.has(u)) return null;
+    visited.add(u);
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), timeout);
+      const r = await fetch(u, {
+        headers: { "user-agent": ua, referer: ref || startUrl, accept: "text/html,application/xhtml+xml,*/*", "accept-language": "es-CO,es;q=0.9,en;q=0.5" },
+        signal: ac.signal, redirect: "follow"
+      });
+      clearTimeout(t);
+      if (!r.ok) return null;
+      const ct = (r.headers.get("content-type") || "").toLowerCase();
+      if (/mpegurl|dash\+xml/i.test(ct)) return { url: r.url || u, from: "content-type" };
+      if (!/html|javascript|xml/i.test(ct)) return null;
+      const html = await r.text();
+      if (!html || html.length > 2e6) return null;
+      for (const m of html.matchAll(M3U8_IN_HTML)) {
+        const mu = m[0].replace(/\\\//g, "/").replace(/\\u0026/gi, "&").replace(/&amp;/g, "&").replace(/["'),;\]}>]+$/g, "");
+        try { new URL(mu); } catch { continue; }
+        return { url: mu, from: "html" };
+      }
+      const iframes = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)];
+      for (const im of iframes) {
+        try {
+          const raw = im[1].replace(/&amp;/g, "&");
+          const iu = new URL(raw, u).href;
+          if (!/^https?:/i.test(iu) || SKIP_IFRAME.test(iu)) continue;
+          const found = await follow(iu, u, depth + 1);
+          if (found) return found;
+        } catch {}
+      }
+      return null;
+    } catch { return null; }
+  }
+  return follow(startUrl, "", 0);
+}
+
 // ============================================================
 // PRUEBA DE UN TÍTULO EN UNA SOLA SESIÓN (lo que pidió el programador)
 // Mismo navegador y misma página para todas las fuentes, en orden. Se detiene en la primera PLAYBACK_CONFIRMED.
@@ -514,6 +564,19 @@ export async function probarTitulo(page, { url, sources = [], code, totalMs = LI
       out.sourceTested = true;
       const task = async () => {
         let r = null;
+        // EXTRACTOR HTTP: si la fuente apunta a una página (no un video directo), sigue la cadena de iframes
+        // por HTTP puro para sacar el .m3u8 sin gastar navegador. Funciona con servidores que bloquean la nube.
+        if (src.href && /^https?:\/\//i.test(src.href) && !/\.(m3u8|mpd|mp4|ts)(\?|$)/i.test(src.href)) {
+          onStep("OPENING \u00b7 extractor HTTP (sin navegador)");
+          try {
+            const ex = await extraerPorHttp(src.href, { timeout: 5000 });
+            if (ex && ex.url) {
+              onStep("FOUND \u00b7 " + ex.url.replace(/\?.*/, "?\u2026").slice(0, 120));
+              r = { status: "working", reason: "HTTP_EXTRACTED", steps: [{ t: Date.now() - t0, s: "HTTP_EXTRACTED" }], media: [ex], href: src.href };
+              return r;
+            }
+          } catch {}
+        }
         // la acción REAL de la fuente en la página del título (clic, evento, lista, pestaña nueva, iframe)
         if (src.op != null) r = await probarFuente(page, { url, i: src.op, nm: src.name, code, signal, ms: LIMITS.sourceAction, onStep, budget });
         // sin acción que tocar en la página: su enlace directo (nunca uno inventado)
